@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#111318" />
+  <title>YUJ Studio — Marketing Intelligence OS</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23171A20' stroke='%23F28C45' stroke-width='2'/%3E%3Ctext x='32' y='44' text-anchor='middle' font-size='38' font-family='-apple-system,BlinkMacSystemFont,sans-serif' font-weight='800' fill='%23F28C45'%3EY%3C/text%3E%3Ccircle cx='46' cy='18' r='4' fill='%2351B9AD'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="styles.css" />
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <div class="shell" id="appShell">
+    <!-- Collapsible Sidebar -->
+    <aside class="sidebar" id="sidebar" aria-label="Main navigation">
+      <div class="sidebar-header">
+        <div class="sidebar-brand">
+          <div class="brand-glyph" aria-hidden="true">
+            <span>Y</span>
+            <span class="glyph-point"></span>
+          </div>
+          <div class="brand-text">
+            <div class="brand-name">YUJ <span class="brand-pill">STUDIO</span></div>
+            <div class="brand-sub">MARKETING INTELLIGENCE OS <span class="brand-version">/ 01</span></div>
+          </div>
+        </div>
+        <button type="button" class="sidebar-collapse-btn" id="sidebarCollapseBtn" title="Toggle sidebar width" aria-label="Collapse sidebar">
+          <i data-icon="chevronLeft"></i>
+        </button>
+      </div>
+
+      <!-- Workspace switcher -->
+      <div class="workspace-switch" role="button" tabindex="0" title="Active workspace: YUJ Ecosystem">
+        <span class="workspace-icon">Y</span>
+        <div class="workspace-copy">
+          <b>YUJ Ecosystem</b>
+          <small><span class="workspace-dot"></span>Marketing Command</small>
+        </div>
+        <span class="chevron" aria-hidden="true">▾</span>
+      </div>
+
+      <!-- Primary navigation -->
+      <div class="sidebar-nav-label">WORKSPACE COMMAND</div>
+      <nav class="nav-group" id="mainNav">
+        <button class="nav-item active" data-page="overview" type="button" aria-current="page">
+          <i data-icon="overview"></i>
+          <span class="nav-label">Command Center</span>
+        </button>
+        <button class="nav-item" data-page="campaigns" type="button">
+          <i data-icon="target"></i>
+          <span class="nav-label">Campaigns</span>
+        </button>
+        <button class="nav-item" data-page="planner" type="button">
+          <i data-icon="grid"></i>
+          <span class="nav-label">Content Planner</span>
+        </button>
+        <button class="nav-item" data-page="creative" type="button">
+          <i data-icon="sparkles"></i>
+          <span class="nav-label">Creative Lab</span>
+          <span class="nav-badge new">ENGINE15</span>
+        </button>
+        <button class="nav-item" data-page="reviews" type="button">
+          <i data-icon="check"></i>
+          <span class="nav-label">Review Queue</span>
+          <span class="nav-count" id="sidebarReviewCount">0</span>
+        </button>
+        <button class="nav-item" data-page="calendar" type="button">
+          <i data-icon="calendar"></i>
+          <span class="nav-label">Publishing Calendar</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-nav-label second-label">INTELLIGENCE & OPERATIONS</div>
+      <nav class="nav-group">
+        <button class="nav-item" data-page="analytics" type="button">
+          <i data-icon="chart"></i>
+          <span class="nav-label">Performance</span>
+        </button>
+        <button class="nav-item" data-page="operations" type="button">
+          <i data-icon="activity"></i>
+          <span class="nav-label">Pipeline Health</span>
+          <span class="nav-status-indicator pulse-indigo" id="sidebarHealthDot"></span>
+        </button>
+        <button class="nav-item" data-page="settings" type="button">
+          <i data-icon="sliders"></i>
+          <span class="nav-label">Connections & Settings</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-fill"></div>
+
+      <!-- Quick pipeline widget -->
+      <div class="sidebar-helper" id="sidebarHelperCard">
+        <div class="sidebar-helper-header">
+          <div class="sidebar-helper-icon"><i data-icon="network"></i></div>
+          <span class="badge-subtle">GUARANTEED SAFE</span>
+        </div>
+        <strong>Unified Marketing Pipeline</strong>
+        <p>Brief → Weekly Plan → Engine15 Render → Human Approval → Meta Publish.</p>
+        <button type="button" class="sidebar-helper-link" data-action="navigate" data-target="operations">
+          Inspect Pipeline Pulse <span>→</span>
+        </button>
+      </div>
+
+      <!-- Sidebar footer -->
+      <div class="sidebar-footer">
+        <span class="status-bubble" id="sidebarStatusBubble"></span>
+        <div class="sidebar-footer-text">
+          <span id="sidebarMode">Preview Workspace</span>
+          <small id="sidebarEnvDetails">Seeded Demo Data</small>
+        </div>
+        <span class="sidebar-footer-right">v1.0</span>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <div class="content-shell">
+      <!-- Sticky Topbar -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <button type="button" id="mobileNavBtn" aria-label="Open mobile navigation" class="icon-btn mobile-nav">
+            <i data-icon="menu"></i>
+          </button>
+          <div class="breadcrumbs">
+            <span class="breadcrumb-root">YUJ Studio</span>
+            <span class="breadcrumb-slash">/</span>
+            <span id="breadcrumbCurrent" class="breadcrumb-current">Command Center</span>
+          </div>
+        </div>
+
+        <div class="topbar-right">
+          <!-- Global Command Search Trigger -->
+          <button type="button" class="global-search-btn" id="commandPaletteTrigger" title="Quick Search and Actions (Ctrl+K)">
+            <i data-icon="search"></i>
+            <span class="search-placeholder">Search campaigns, drafts, actions...</span>
+            <kbd class="kbd-shortcut"><span class="kbd-mod">⌘</span>K</kbd>
+          </button>
+
+          <!-- System Pulse Pill -->
+          <div class="service-pulse-pill" id="topbarServicePulse" title="Service health: Database, Event Bus, Engine15, Meta">
+            <span class="pulse-dot"></span>
+            <span class="pulse-text" id="topbarPulseText">System Pulse</span>
+          </div>
+
+          <!-- Theme Switcher -->
+          <button class="icon-btn theme-toggle-btn" id="themeToggleBtn" type="button" aria-label="Toggle Light/Dark Theme" title="Toggle Theme (Dark / Light)">
+            <i data-icon="sun" class="sun-icon"></i>
+            <i data-icon="moon" class="moon-icon"></i>
+          </button>
+
+          <!-- Notifications Button -->
+          <button class="icon-btn notification-btn" id="notificationsBtn" type="button" aria-label="Open Notifications and Alerts" title="Notifications & Attention Queue">
+            <i data-icon="bell"></i>
+            <span id="notificationDot" class="notification-dot"></span>
+          </button>
+
+          <div class="topbar-divider"></div>
+
+          <!-- Operator identity -->
+          <div class="user-identity" id="userIdentity">
+            <div class="user-avatar" id="userAvatar">Y</div>
+            <div class="user-copy">
+              <strong id="userName">Workspace Admin</strong>
+              <span id="userOrg">YUJ Foundation</span>
+            </div>
+          </div>
+
+          <!-- Sign Out Button -->
+          <button type="button" id="logoutBtn" class="icon-btn logout-btn" title="Sign out of Console" aria-label="Sign out">
+            <i data-icon="logout"></i>
+          </button>
+        </div>
+      </header>
+
+      <!-- Persistent Environment Mode Banner -->
+      <div class="mode-banner" id="modeBanner" role="status">
+        <div class="mode-banner-content">
+          <i data-icon="info" class="mode-banner-icon"></i>
+          <span id="modeBannerText">
+            <b>Preview Mode:</b> Offline seeded demonstration data and simulated local workflows. No real accounts or Meta channels will be published.
+          </span>
+        </div>
+        <div class="mode-banner-actions">
+          <button type="button" class="banner-action-btn" data-action="navigate" data-target="settings">
+            Connection Setup <span>↗</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Main Dynamic View Container -->
+      <main id="appView" tabindex="-1" aria-live="polite">
+        <!-- Views rendered dynamically by app.js -->
+      </main>
+
+      <!-- Accessible Footer -->
+      <footer class="page-footer">
+        <div class="footer-left">
+          <span>© YUJ Foundation · Purpose-Driven Marketing Intelligence OS</span>
+          <span class="footer-dot">·</span>
+          <span>Zero-Trust Human Approval Architecture</span>
+        </div>
+        <div class="footer-right">
+          <span class="footer-build">Engine15 v2.5 Adapter · Social Studio v0.6 API Gateway</span>
+        </div>
+      </footer>
+    </div>
+  </div>
+
+  <!-- Reusable Glass Modal Dialog -->
+  <div class="overlay" id="modalOverlay" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal-backdrop" data-action="close-modal" id="modalBackdrop"></div>
+    <div class="modal" id="modalContainer">
+      <div class="modal-top">
+        <div>
+          <div class="eyebrow" id="modalEyebrow">YUJ STUDIO</div>
+          <h2 id="modalTitle">Modal Title</h2>
+        </div>
+        <button class="icon-btn modal-close-btn" id="modalCloseBtn" aria-label="Close dialog" type="button" data-action="close-modal">
+          <i data-icon="close"></i>
+        </button>
+      </div>
+      <div id="modalBody" class="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Command Palette Modal (Ctrl+K / Cmd+K) -->
+  <div class="overlay command-palette-overlay" id="commandPaletteOverlay" aria-hidden="true" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" data-action="close-palette"></div>
+    <div class="command-palette-card">
+      <div class="palette-input-wrap">
+        <i data-icon="search" class="palette-search-icon"></i>
+        <input type="text" id="commandPaletteInput" placeholder="Type a command, search campaigns, or jump to module..." autocomplete="off" spellcheck="false" aria-label="Command search" />
+        <kbd class="palette-esc-kbd">ESC</kbd>
+      </div>
+      <div class="palette-results" id="paletteResults">
+        <!-- Rendered dynamically -->
+      </div>
+      <div class="palette-footer">
+        <span><kbd>↑</kbd><kbd>↓</kbd> to navigate</span>
+        <span><kbd>↵</kbd> to select</span>
+        <span><kbd>ESC</kbd> to dismiss</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Region -->
+  <div class="toast-region" id="toastRegion" aria-live="polite" aria-label="Notifications"></div>
+
+  <!-- Authenticated Gateway Sign-in Modal for Live Mode -->
+  <div class="login-overlay hidden" id="loginOverlay" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+    <div class="login-panel">
+      <div class="login-header">
+        <div class="login-logo">
+          <span>Y</span>
+          <span class="login-logo-glow"></span>
+        </div>
+        <div class="eyebrow">PROTECTED WORKSPACE GATEWAY</div>
+        <h1 id="loginTitle">Sign in to YUJ Studio.</h1>
+        <p>Enter your single-operator console password to access the authenticated Social Studio and Engine15 services.</p>
+      </div>
+      <form id="loginForm" class="login-form">
+        <div class="form-group">
+          <label class="form-label" for="loginPassword">
+            Console Password
+            <input type="password" id="loginPassword" name="password" required autocomplete="current-password" placeholder="Enter operator password" />
+          </label>
+        </div>
+        <button class="btn btn-primary btn-full btn-lg" type="submit">
+          <span>Unlock Command Center</span>
+          <i data-icon="arrow"></i>
+        </button>
+      </form>
+      <div class="login-notice">
+        <i data-icon="shield"></i>
+        <p class="login-hint" id="loginHint">
+          Authentication is verified strictly at the same-origin FastAPI gateway. Upstream Social Studio and Renderer API keys remain protected server-side.
+        </p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
