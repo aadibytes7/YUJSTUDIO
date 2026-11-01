@@ -4469,11 +4469,3 @@ if (typeof globalThis !== 'undefined') {
     loadDemo
   };
 }
-{
-  "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": "https://yujstudio.onrender.com/api/$1"
-    }
-  ]
-}
