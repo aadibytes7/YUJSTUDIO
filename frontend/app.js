@@ -714,9 +714,11 @@ function demoInsights() {
   };
 }
 
-// --------------------------------------------------------------------------
+// -------------------------------------------------------------------------
 // 5. GATEWAY CLIENT (LIVE REST / CORS ISOLATION)
-// --------------------------------------------------------------------------
+// -------------------------------------------------------------------------
+const API_BASE_URL = 'https://yujstudio.onrender.com';
+
 async function gatewayFetch(path, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (options.body && !(options.body instanceof FormData)) {
@@ -727,7 +729,8 @@ async function gatewayFetch(path, options = {}) {
   }
   let res;
   try {
-    res = await fetch(path, { ...options, headers, credentials: 'same-origin', cache: 'no-store' });
+    const targetUrl = path.startsWith('http') ? path : `${API_BASE_URL}${path.startsWith('/') ? '' : '/'}${path}`;
+    res = await fetch(targetUrl, { ...options, headers, credentials: 'omit', cache: 'no-store' });
   } catch {
     throw new Error('Cannot reach the YUJ console gateway. Check that the server is running.');
   }
