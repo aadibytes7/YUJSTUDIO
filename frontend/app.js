@@ -738,6 +738,11 @@ async function gatewayFetch(path, options = {}) {
     $('loginOverlay')?.classList.remove('hidden');
     throw new Error('Your console session has expired. Please sign in again.');
   }
+  if (!res.ok) {
+    throw new Error(`Gateway returned HTTP ${res.status}`);
+  }
+  return await res.json();
+}
   let body = null;
   const type = res.headers.get('content-type') || '';
   try {
@@ -773,7 +778,7 @@ async function boot() {
 
   try {
     if (typeof location !== 'undefined' && location.protocol !== 'file:') {
-      const res = await fetch('/api/config', { credentials: 'same-origin', cache: 'no-store' });
+      const res = await fetch('https://yujstudio.onrender.com/api/config', { credentials: 'omit', cache: 'no-store' });
       if (res.ok) {
         const v = await res.json();
         env.mode = v.mode === 'live' ? 'live' : 'demo';
@@ -785,7 +790,7 @@ async function boot() {
 
   if (env.mode === 'live') {
     try {
-      const ses = await gatewayFetch('/api/session');
+      const ses = await gatewayFetch('https://yujstudio.onrender.com/api/session');
       state.csrf = ses.csrf || '';
       if (!ses.authenticated) {
         $('loginOverlay')?.classList.remove('hidden');
