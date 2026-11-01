@@ -4472,8 +4472,8 @@ if (typeof globalThis !== 'undefined') {
 {
   "rewrites": [
     {
-      "source": "/api/:path*",
-      "destination": "https://yujstudio.onrender.com/api/:path*"
+      "source": "/api/(.*)",
+      "destination": "https://yujstudio.onrender.com/api/$1"
     }
   ]
 }
