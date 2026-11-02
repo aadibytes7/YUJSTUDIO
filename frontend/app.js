@@ -740,7 +740,7 @@ async function gatewayFetch(path, options = {}) {
       credentials: 'omit',
       cache: 'no-store'
     });
-  } catch (err) {
+  } catch {
     throw new Error('Cannot reach the YUJ console gateway. Check that the server is running.');
   }
 
@@ -757,7 +757,7 @@ async function gatewayFetch(path, options = {}) {
     } else {
       body = await res.text();
     }
-  } catch (e) {
+  } catch {
     body = null;
   }
 
@@ -766,6 +766,9 @@ async function gatewayFetch(path, options = {}) {
     if (typeof message !== 'string') message = JSON.stringify(message);
     throw new Error(message);
   }
+
+  return body;
+}
 
   return body;
 }
