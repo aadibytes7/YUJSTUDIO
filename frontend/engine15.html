@@ -4267,11 +4267,15 @@ if (exportBtn) {
         source: "engine15_standalone"
       }));
 
-      // 3. Post to the valid /v1/assets endpoint on the gateway
+      // 3. Fetch CSRF token and post to gateway
+      const sessionRes = await fetch(`${API_BASE_URL}/api/session`, { credentials: "include" });
+      const sessionData = await sessionRes.json();
+
       const response = await fetch(`${API_BASE_URL}/api/social/v1/assets`, {
         method: "POST",
         headers: {
-          "X-YUJ-Social-Key": "yuj_admin_secret_key_1234567890_v05"
+          "X-YUJ-Social-Key": "yuj_admin_secret_key_1234567890_v05",
+          "X-CSRF-Token": sessionData.csrf || ""
         },
         credentials: "include", // Send session cookie across origins
         body: formData
