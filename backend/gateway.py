@@ -349,9 +349,22 @@ def create_app(settings: Config | None = None) -> FastAPI:
         if not live:
             raise HTTPException(503, "Demo mode cannot perform Social Studio operations")
         
-        # Self-contained fallback for GET queries when running on a single Render service
+       # Self-contained fallback for GET queries when running on a single Render service
         if request.method == "GET" and config.social_base_url.rstrip("/") in str(request.base_url).rstrip("/"):
-            if any(k in path for k in ["accounts", "campaigns", "plans", "content", "jobs", "calendar", "analytics", "ops", "metrics", "production"]):
+            if "content" in path or "assets" in path:
+                return JSONResponse(UPLOADED_ASSETS)
+            if "accounts" in path:
+                page_id = os.getenv("TAXILAAUTO_PAGE_ID", "1253108971222914")
+                return JSONResponse([
+                    {
+                        "id": page_id,
+                        "name": "Taxilaauto",
+                        "platform": "meta",
+                        "status": "connected",
+                        "type": "business_page"
+                    }
+                ])
+            if any(k in path for k in ["campaigns", "plans", "jobs", "calendar", "analytics", "ops", "metrics", "production"]):
                 return JSONResponse([] if "overview" not in path and "status" not in path else {})
 
         return await forward(request, valid_upstream(config.social_base_url, config.allow_http_upstream),
