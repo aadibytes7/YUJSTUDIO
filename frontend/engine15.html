@@ -4243,46 +4243,50 @@ if (exportBtn) {
     const originalText = exportBtn.innerHTML;
 
     try {
-      exportBtn.innerHTML = "<span>⏳</span> Uploading to YUJ...";
+      exportBtn.innerHTML = "<span>⏳</span> Exporting & Uploading...";
       exportBtn.disabled = true;
 
-      // 1. Export canvas to high-res PNG Data URL
-      const imageDataUrl = previewCanvas.toDataURL("image/png");
+      // 1. Download file locally for the user
+      const downloadLink = document.createElement("a");
+      downloadLink.download = `yuj_creative_${Date.now()}.png`;
+      downloadLink.href = previewCanvas.toDataURL("image/png");
+      downloadLink.click();
 
-      // 2. Prepare creative metadata payload
-      const payload = {
+      // 2. Convert canvas to Blob for network transmission
+      const blob = await new Promise(resolve => previewCanvas.toBlob(resolve, "image/png"));
+      
+      const formData = new FormData();
+      formData.append("file", blob, "engine15_render.png");
+      formData.append("brand", "yuj-foundation");
+      formData.append("metadata", JSON.stringify({
         archetype: $("archetypeSelect")?.value || "auto",
         headline: $("headlineInput")?.value || "",
         subheading: $("subheadingInput")?.value || "",
         aspect_ratio: `${canvasW}:${canvasH}`,
         composition_score: parseFloat($("compositionScore")?.innerText) || 85.0,
-        image_data: imageDataUrl
-      };
+        source: "engine15_standalone"
+      }));
 
-      // 3. Post to live FastAPI Gateway endpoint
-      const response = await fetch(`${API_BASE_URL}/api/social/v1/content/render`, {
+      // 3. Post to the valid /v1/assets endpoint on the gateway
+      const response = await fetch(`${API_BASE_URL}/api/social/v1/assets`, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json"
+          "X-YUJ-Social-Key": "yuj_admin_secret_key_1234567890_v05"
         },
-        credentials: "omit",
-        body: JSON.stringify(payload)
+        credentials: "include", // Send session cookie across origins
+        body: formData
       });
 
       if (!response.ok) {
-        throw new Error(`Upload returned status: ${response.status}`);
+        const errorText = await response.text();
+        throw new Error(`Server returned HTTP ${response.status}: ${errorText}`);
       }
 
       const result = await response.json();
       alert("Asset successfully uploaded and registered in YUJ Campaign Pipeline!");
     } catch (err) {
-      console.warn("Direct upload fallback, triggering local file download:", err);
-      // Fallback: trigger standard browser image download if backend is unauthenticated
-      const link = document.createElement("a");
-      link.download = `yuj_creative_${Date.now()}.png`;
-      link.href = previewCanvas.toDataURL("image/png");
-      link.click();
+      console.error("Upload failed:", err);
+      alert(`Upload error: ${err.message}`);
     } finally {
       exportBtn.innerHTML = originalText;
       exportBtn.disabled = false;
