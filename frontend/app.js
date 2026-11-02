@@ -724,9 +724,10 @@ async function gatewayFetch(path, options = {}) {
   if (options.body && !(options.body instanceof FormData)) {
     headers['Content-Type'] = 'application/json';
   }
-  if (options.method && options.method !== 'GET' && state && state.csrf) {
+  if (options.method && options.method !== 'GET' && typeof state !== 'undefined' && state.csrf) {
     headers['X-CSRF-Token'] = state.csrf;
   }
+
   let res;
   try {
     const targetUrl = path.startsWith('http')
@@ -748,22 +749,24 @@ async function gatewayFetch(path, options = {}) {
     throw new Error('Your console session has expired. Please sign in again.');
   }
 
-  if (!res.ok) {
-    throw new Error(`Gateway returned HTTP ${res.status}`);
+  let body = null;
+  const type = res.headers?.get('content-type') || '';
+  try {
+    if (type.includes('json')) {
+      body = await res.json();
+    } else {
+      body = await res.text();
+    }
+  } catch {
+    body = null;
   }
 
-  return await res.json();
-}
-  let body = null;
-  const type = res.headers.get('content-type') || '';
-  try {
-    body = type.includes('json') ? await res.json() : await res.text();
-  } catch {}
   if (!res.ok) {
     let message = body?.detail || body?.error || body?.message || `Request failed (${res.status})`;
     if (typeof message !== 'string') message = JSON.stringify(message);
     throw new Error(message);
   }
+
   return body;
 }
 
