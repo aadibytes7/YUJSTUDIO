@@ -118,9 +118,13 @@ class Config:
         if self.renderer_base_url:
             valid_upstream(self.renderer_base_url, self.allow_http_upstream)
         if self.console_origin:
-            p=urlsplit(self.console_origin)
-            if p.scheme not in ("http", "https") or not p.netloc or p.path not in ("", "/"):
-                raise ValueError("YUJ_CONSOLE_ORIGIN must be a browser origin, such as https://studio.example.org")
+            for raw_origin in self.console_origin.split(","):
+                origin = raw_origin.strip()
+                if not origin:
+                    continue
+                p = urlsplit(origin)
+                if p.scheme not in ("http", "https") or not p.netloc or p.path not in ("", "/"):
+                    raise ValueError("YUJ_CONSOLE_ORIGIN must be a browser origin, such as https://studio.example.org")
 
 
 class PasswordIn(BaseModel):
