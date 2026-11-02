@@ -4232,6 +4232,63 @@ window.addEventListener("DOMContentLoaded", async () => {
   buildAndPreviewGenerativePrompt();
   setStatus("PROCEDURAL", "amber");
 });
+/* =========================================================
+   GATEWAY PIPELINE UPLOAD FOR EXPORT MASTER PNG
+========================================================= */
+const API_BASE_URL = 'https://yujstudio.onrender.com';
+
+const exportBtn = $("downloadBtn");
+if (exportBtn) {
+  exportBtn.addEventListener("click", async () => {
+    const originalText = exportBtn.innerHTML;
+
+    try {
+      exportBtn.innerHTML = "<span>⏳</span> Uploading to YUJ...";
+      exportBtn.disabled = true;
+
+      // 1. Export canvas to high-res PNG Data URL
+      const imageDataUrl = previewCanvas.toDataURL("image/png");
+
+      // 2. Prepare creative metadata payload
+      const payload = {
+        archetype: $("archetypeSelect")?.value || "auto",
+        headline: $("headlineInput")?.value || "",
+        subheading: $("subheadingInput")?.value || "",
+        aspect_ratio: `${canvasW}:${canvasH}`,
+        composition_score: parseFloat($("compositionScore")?.innerText) || 85.0,
+        image_data: imageDataUrl
+      };
+
+      // 3. Post to live FastAPI Gateway endpoint
+      const response = await fetch(`${API_BASE_URL}/api/social/v1/content/render`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        credentials: "omit",
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        throw new Error(`Upload returned status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      alert("Asset successfully uploaded and registered in YUJ Campaign Pipeline!");
+    } catch (err) {
+      console.warn("Direct upload fallback, triggering local file download:", err);
+      // Fallback: trigger standard browser image download if backend is unauthenticated
+      const link = document.createElement("a");
+      link.download = `yuj_creative_${Date.now()}.png`;
+      link.href = previewCanvas.toDataURL("image/png");
+      link.click();
+    } finally {
+      exportBtn.innerHTML = originalText;
+      exportBtn.disabled = false;
+    }
+  });
+}
 </script>
 
 </body>
