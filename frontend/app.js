@@ -724,23 +724,34 @@ async function gatewayFetch(path, options = {}) {
   if (options.body && !(options.body instanceof FormData)) {
     headers['Content-Type'] = 'application/json';
   }
-  if (options.method && options.method !== 'GET' && state.csrf) {
+  if (options.method && options.method !== 'GET' && state && state.csrf) {
     headers['X-CSRF-Token'] = state.csrf;
   }
   let res;
   try {
-    const targetUrl = path.startsWith('http') ? path : `${API_BASE_URL}${path.startsWith('/') ? '' : '/'}${path}`;
-    res = await fetch(targetUrl, { ...options, headers, credentials: 'omit', cache: 'no-store' });
+    const targetUrl = path.startsWith('http')
+      ? path
+      : `${API_BASE_URL}${path.startsWith('/') ? '' : '/'}${path}`;
+
+    res = await fetch(targetUrl, {
+      ...options,
+      headers,
+      credentials: 'omit',
+      cache: 'no-store'
+    });
   } catch {
     throw new Error('Cannot reach the YUJ console gateway. Check that the server is running.');
   }
+
   if (res.status === 401) {
     $('loginOverlay')?.classList.remove('hidden');
     throw new Error('Your console session has expired. Please sign in again.');
   }
+
   if (!res.ok) {
     throw new Error(`Gateway returned HTTP ${res.status}`);
   }
+
   return await res.json();
 }
   let body = null;
