@@ -350,7 +350,7 @@ def create_app(settings: Config | None = None) -> FastAPI:
             raise HTTPException(503, "Demo mode cannot perform Social Studio operations")
         
        # Self-contained fallback for GET queries when running on a single Render service
-        if request.method == "GET" and config.social_base_url.rstrip("/") in str(request.base_url).rstrip("/"):
+        if request.method == "GET":
             if "content" in path or "assets" in path:
                 return JSONResponse(UPLOADED_ASSETS)
             if "accounts" in path:
