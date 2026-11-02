@@ -357,13 +357,13 @@ def create_app(settings: Config | None = None) -> FastAPI:
         return await forward(request, valid_upstream(config.social_base_url, config.allow_http_upstream),
                              config.social_api_key, "X-YUJ-Social-Key", ALLOWED_SOCIAL, "/" + path)
 
-    @app.get("/api/renderer/{path:path}")
-    async def renderer_proxy(path: str, request: Request):
+   @app.api_route("/api/renderer/{path:path}", methods=["GET", "POST", "PATCH"])
+    @app.get("/api/renderer")
+    async def renderer_proxy(path: str = "", request: Request = None):
         if not config.renderer_base_url:
             return JSONResponse({"status": "ready", "capabilities": ["diffusion", "layout", "export"]})
         return await forward(request, valid_upstream(config.renderer_base_url, config.allow_http_upstream),
                              config.renderer_api_key, "X-YUJ-Renderer-Key", ALLOWED_RENDERER, "/" + path)
-
     return app
 
 
