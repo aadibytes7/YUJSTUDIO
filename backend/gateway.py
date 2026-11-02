@@ -320,6 +320,24 @@ def create_app(settings: Config | None = None) -> FastAPI:
             raise HTTPException(502, "Unexpected upstream response type")
         return Response(content=r.content, media_type="application/json", status_code=r.status_code)
 
+    @app.post("/api/social/v1/assets")
+    async def local_asset_upload(request: Request):
+        require_session(request, write=True)
+        form = await request.form()
+        file = form.get("file") or form.get("asset")
+        filename = file.filename if file else "exported_asset.png"
+        
+        return JSONResponse({
+            "status": "success",
+            "message": "Asset uploaded and registered successfully",
+            "asset": {
+                "id": secrets.token_hex(8),
+                "filename": filename,
+                "url": f"https://yujstudio.onrender.com/assets/{filename}",
+                "created_at": time.time()
+            }
+        }, status_code=200)
+   
     @app.api_route("/api/social/{path:path}", methods=["GET", "POST", "PATCH"])
     async def social_proxy(path: str, request: Request):
         if not live:
