@@ -33,6 +33,8 @@ SESSION_COOKIE = "yuj_console_session"
 SESSION_SECONDS = 8 * 60 * 60
 SAFE_PATH = re.compile(r"^[a-zA-Z0-9._/-]{1,220}$")
 
+# Store uploaded assets in memory for self-contained mode
+UPLOADED_ASSETS = []
 # Method-specific allow-list. The gateway deliberately cannot call arbitrary
 # endpoints, approve via renderer, read credentials, or bypass Social Studio.
 ALLOWED_SOCIAL = {
@@ -327,15 +329,19 @@ def create_app(settings: Config | None = None) -> FastAPI:
         file = form.get("file") or form.get("asset")
         filename = file.filename if file else "exported_asset.png"
         
+        asset_item = {
+            "id": secrets.token_hex(8),
+            "title": filename,
+            "filename": filename,
+            "url": f"https://yujstudio.onrender.com/assets/{filename}",
+            "created_at": time.time()
+        }
+        UPLOADED_ASSETS.append(asset_item)
+        
         return JSONResponse({
             "status": "success",
             "message": "Asset uploaded and registered successfully",
-            "asset": {
-                "id": secrets.token_hex(8),
-                "filename": filename,
-                "url": f"https://yujstudio.onrender.com/assets/{filename}",
-                "created_at": time.time()
-            }
+            "asset": asset_item
         }, status_code=200)
    
     @app.api_route("/api/social/{path:path}", methods=["GET", "POST", "PATCH"])
