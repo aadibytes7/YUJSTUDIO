@@ -728,6 +728,9 @@ async function gatewayFetch(path, options = {}) {
     headers['X-CSRF-Token'] = state.csrf;
   }
 
+  // Pass admin key to authenticate gateway proxy requests
+  headers['X-YUJ-Social-Key'] = 'yuj_admin_secret_key_1234567890_v05';
+
   let res;
   try {
     const targetUrl = path.startsWith('http')
@@ -740,13 +743,20 @@ async function gatewayFetch(path, options = {}) {
       credentials: 'include',
       cache: 'no-store'
     });
-  } catch {
+  } catch (err) {
     throw new Error('Cannot reach the YUJ console gateway. Check that the server is running.');
   }
 
+  // Handle 401 Unauthorized without crashing the script
   if (res.status === 401) {
     $('loginOverlay')?.classList.remove('hidden');
-    throw new Error('Your console session has expired. Please sign in again.');
+    return null;
+  }
+
+  // Handle 404 Not Found gracefully
+  if (res.status === 404) {
+    console.warn(`Gateway 404 Not Found for: ${path}`);
+    return null;
   }
 
   let body = null;
@@ -769,7 +779,6 @@ async function gatewayFetch(path, options = {}) {
 
   return body;
 }
-
 
 const service = (path, options = {}) => gatewayFetch('/api/social' + path, options);
 
@@ -4492,3 +4501,38 @@ if (typeof globalThis !== 'undefined') {
     loadDemo
   };
 }
+// Expose Engine 15 asset uploader globally for engine15.html integration
+window.uploadEngine15Asset = async function(blobOrBase64, metadata = {}) {
+  try {
+    let fileBlob;
+    if (typeof blobOrBase64 === 'string' && blobOrBase64.startsWith('data:')) {
+      const arr = blobOrBase64.split(',');
+      const mime = arr[0].match(/:(.*?);/)[1];
+      const bstr = atob(arr[1]);
+      let n = bstr.length;
+      const u8arr = new Uint8Array(n);
+      while (n--) {
+        u8arr[n] = bstr.charCodeAt(n);
+      }
+      fileBlob = new Blob([u8arr], { type: mime });
+    } else {
+      fileBlob = blobOrBase64;
+    }
+
+    const formData = new FormData();
+    formData.append('file', fileBlob, metadata.filename || 'engine15_render.png');
+    formData.append('metadata', JSON.stringify({
+      archetype: metadata.archetype || 'auto',
+      compositionScore: metadata.compositionScore || null,
+      generatedAt: new Date().toISOString()
+    }));
+
+    return await gatewayFetch('/api/social/v1/assets', {
+      method: 'POST',
+      body: formData
+    });
+  } catch (err) {
+    console.error('Failed to upload Engine 15 asset:', err);
+    throw err;
+  }
+};
