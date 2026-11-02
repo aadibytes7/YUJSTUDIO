@@ -770,8 +770,6 @@ async function gatewayFetch(path, options = {}) {
   return body;
 }
 
-  return body;
-}
 
 const service = (path, options = {}) => gatewayFetch('/api/social' + path, options);
 
