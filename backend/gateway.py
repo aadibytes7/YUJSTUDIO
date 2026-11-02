@@ -359,8 +359,10 @@ def create_app(settings: Config | None = None) -> FastAPI:
                     {
                         "id": page_id,
                         "name": "Taxilaauto",
+                        "brand": "Taxilaauto",
                         "platform": "meta",
                         "status": "connected",
+                        "state": "active",
                         "type": "business_page"
                     }
                 ])
