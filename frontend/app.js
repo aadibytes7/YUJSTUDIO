@@ -737,7 +737,7 @@ async function gatewayFetch(path, options = {}) {
     res = await fetch(targetUrl, {
       ...options,
       headers,
-      credentials: 'omit',
+      credentials: 'include',
       cache: 'no-store'
     });
   } catch {
@@ -793,7 +793,7 @@ async function boot() {
 
   try {
     if (typeof location !== 'undefined' && location.protocol !== 'file:') {
-      const res = await fetch('https://yujstudio.onrender.com/api/config', { credentials: 'omit', cache: 'no-store' });
+      const res = await fetch('https://yujstudio.onrender.com/api/config', { credentials: 'include', cache: 'no-store' });
       if (res.ok) {
         const v = await res.json();
         env.mode = v.mode === 'live' ? 'live' : 'demo';
