@@ -360,6 +360,8 @@ def create_app(settings: Config | None = None) -> FastAPI:
     @app.api_route("/api/renderer/{path:path}", methods=["GET", "POST", "PATCH"])
     @app.get("/api/renderer")
     async def renderer_proxy(path: str = "", request: Request = None):
+        if not path or path == "capabilities" or "capabilities" in path:
+            return JSONResponse({"status": "ready", "capabilities": ["diffusion", "layout", "export"]})
         if not config.renderer_base_url:
             return JSONResponse({"status": "ready", "capabilities": ["diffusion", "layout", "export"]})
         return await forward(request, valid_upstream(config.renderer_base_url, config.allow_http_upstream),
