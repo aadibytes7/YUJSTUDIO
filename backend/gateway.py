@@ -173,9 +173,12 @@ def create_app(settings: Config | None = None) -> FastAPI:
 
     def validate_origin(request: Request) -> None:
         origin = request.headers.get("origin")
-        if origin and config.console_origin and origin.rstrip("/") != config.console_origin.rstrip("/"):
-            raise HTTPException(403, "Cross-origin operator requests are forbidden")
-        if origin and not config.console_origin:
+        if origin and config.console_origin:
+            # Split comma-separated origins from environment variable and strip trailing slashes
+            allowed_origins = [o.strip().rstrip("/") for o in config.console_origin.split(",")]
+            if origin.rstrip("/") not in allowed_origins:
+                raise HTTPException(403, "Cross-origin operator requests are forbidden")
+        elif origin and not config.console_origin:
             # Without a configured public origin, accept only same-origin browser requests.
             incoming = urlsplit(origin)
             if incoming.netloc.lower() != request.url.netloc.lower() or incoming.scheme != request.url.scheme:
