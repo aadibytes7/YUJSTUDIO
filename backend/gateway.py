@@ -219,6 +219,10 @@ def create_app(settings: Config | None = None) -> FastAPI:
     @app.get("/app.js")
     async def javascript():
         return FileResponse(FRONTEND_DIR / "app.js", media_type="text/javascript", headers={"Cache-Control": "no-cache"})
+    
+    @app.get("/engine15.html")
+    async def engine15():
+        return FileResponse(FRONTEND_DIR / "engine15.html", media_type="text/html", headers={"Cache-Control": "no-store"})
 
     @app.get("/assets/engine15-sample.png")
     async def sample_image():
