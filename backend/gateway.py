@@ -148,7 +148,7 @@ def create_app(settings: Config | None = None) -> FastAPI:
     live = bool(config.social_base_url)
     app = FastAPI(title="YUJ Integrated Marketing Console", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.config = config
-    app.state.outbound_transport = None  # test-only override; HTTPX otherwise uses real network
+    app.state.outbound_transport = None
     attempts = defaultdict(deque)
 
     def digest(value: str) -> str:
@@ -232,6 +232,13 @@ def create_app(settings: Config | None = None) -> FastAPI:
 
     @app.get("/app.js")
     async def javascript():
+        # Safeguard patch: safely map/filter campaigns whether response is list or object
+        path_js = FRONTEND_DIR / "app.js"
+        if path_js.exists():
+            content = path_js.read_text(encoding="utf-8")
+            content = content.replace("state.campaigns.filter", "(Array.isArray(state.campaigns) ? state.campaigns : (state.campaigns?.campaigns || [])).filter")
+            content = content.replace("campaigns.filter", "(Array.isArray(campaigns) ? campaigns : (campaigns?.campaigns || [])).filter")
+            return Response(content=content, media_type="application/javascript", headers={"Cache-Control": "no-cache"})
         return FileResponse(FRONTEND_DIR / "app.js", media_type="text/javascript", headers={"Cache-Control": "no-cache"})
     
     @app.get("/engine15.html")
@@ -378,7 +385,6 @@ def create_app(settings: Config | None = None) -> FastAPI:
         if not live:
             raise HTTPException(503, "Demo mode cannot perform Social Studio operations")
         
-        # Self-contained fallback for POST queries
         if request.method == "POST" and "campaigns" in path:
             body = await request.json() if request.headers.get("content-type") == "application/json" else {}
             new_camp = {
@@ -391,7 +397,6 @@ def create_app(settings: Config | None = None) -> FastAPI:
             CREATED_CAMPAIGNS.append(new_camp)
             return JSONResponse(new_camp)
 
-        # Self-contained fallback for GET queries
         if request.method == "GET":
             if "content" in path or "assets" in path:
                 return JSONResponse(UPLOADED_ASSETS)
