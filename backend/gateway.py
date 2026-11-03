@@ -335,10 +335,17 @@ def create_app(settings: Config | None = None) -> FastAPI:
         file_bytes = await file.read()
         file_path = f"uploads/{secrets.token_hex(4)}_{filename}"
         
-        # Initialize Supabase client using environment variables
+        # Initialize Supabase client using your exact Render environment variable names
         supabase_url = os.getenv("SUPABASE_URL", "https://wztnopehqmufawgkjzya.supabase.co")
-        supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", os.getenv("SUPABASE_KEY", ""))
+        supabase_key = (
+            os.getenv("SUPABASE_SECRET_KEY") or 
+            os.getenv("SUPABASE_SERVICE_ROLE_KEY") or 
+            os.getenv("SUPABASE_KEY") or 
+            os.getenv("SUPABASE_ANON_KEY") or ""
+        )
         
+        if not supabase_key:
+            raise HTTPException(500, "Supabase key environment variable is missing on Render")
         try:
             supabase = create_client(supabase_url, supabase_key)
             # Upload directly to your public Supabase storage bucket
