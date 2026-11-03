@@ -73,26 +73,76 @@ def format_campaign(camp: dict) -> dict:
     }
 
 
+async def resolve_meta_context(meta_token: str, page_id: str, ig_user_id: str = "") -> tuple[str, str]:
+    """Resolves the Page Access Token and Instagram Business Account ID.
+    If a User Access Token is provided, fetches the dedicated Page Access Token
+    to avoid deprecated 'publish_actions' permission error.
+    """
+    page_token = meta_token
+    resolved_ig_id = ig_user_id
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.get(
+                f"https://graph.facebook.com/v21.0/{page_id}",
+                params={"fields": "access_token,instagram_business_account", "access_token": meta_token}
+            )
+            data = r.json()
+            if "access_token" in data:
+                page_token = data["access_token"]
+            if "instagram_business_account" in data and not resolved_ig_id:
+                resolved_ig_id = data["instagram_business_account"].get("id", "")
+
+            if page_token == meta_token or not resolved_ig_id:
+                r2 = await client.get(
+                    "https://graph.facebook.com/v21.0/me/accounts",
+                    params={"fields": "id,access_token,instagram_business_account", "access_token": meta_token}
+                )
+                data2 = r2.json()
+                for item in data2.get("data", []):
+                    if str(item.get("id")) == str(page_id):
+                        if "access_token" in item:
+                            page_token = item["access_token"]
+                        if "instagram_business_account" in item and not resolved_ig_id:
+                            resolved_ig_id = item["instagram_business_account"].get("id", "")
+                        break
+    except Exception as e:
+        print(f"Failed to auto-resolve page token: {e}")
+
+    return page_token, resolved_ig_id
+
+
 async def publish_to_instagram(image_url: str, caption: str) -> dict:
     """Publish a photo to Instagram using Meta Graph API (2-step container + publish flow)."""
     meta_token = os.getenv("META_ACCESS_TOKEN") or os.getenv("FACEBOOK_ACCESS_TOKEN") or os.getenv("META_TOKEN") or ""
     ig_user_id = os.getenv("INSTAGRAM_ACCOUNT_ID") or os.getenv("INSTAGRAM_USER_ID") or os.getenv("META_IG_ACCOUNT_ID") or ""
+    page_id = (
+        os.getenv("TAXILAAUTO_PAGE_ID") or 
+        os.getenv("FACEBOOK_PAGE_ID") or 
+        os.getenv("META_PAGE_ID") or 
+        os.getenv("PAGE_ID") or 
+        "1331411980059857"
+    )
 
     if not meta_token:
         return {"success": False, "error": "META_ACCESS_TOKEN environment variable not set on server", "platform": "instagram"}
-    if not ig_user_id:
-        return {"success": False, "error": "INSTAGRAM_ACCOUNT_ID environment variable not set on server", "platform": "instagram"}
     if not image_url or not image_url.startswith("http"):
         return {"success": False, "error": "Valid public HTTPS image URL required for Instagram publication", "platform": "instagram"}
+
+    # Auto-resolve Page Access Token and Instagram ID
+    page_token, resolved_ig_id = await resolve_meta_context(meta_token, page_id, ig_user_id)
+    target_ig_id = resolved_ig_id or ig_user_id
+    if not target_ig_id:
+        return {"success": False, "error": "Instagram Business Account ID not found. Ensure your Instagram Professional account is connected to your Facebook Page", "platform": "instagram"}
 
     try:
         async with httpx.AsyncClient(timeout=45.0) as client:
             # Step 1: Create media container
-            container_endpoint = f"https://graph.facebook.com/v21.0/{ig_user_id}/media"
+            container_endpoint = f"https://graph.facebook.com/v21.0/{target_ig_id}/media"
             container_params = {
                 "image_url": image_url,
                 "caption": caption,
-                "access_token": meta_token
+                "access_token": page_token
             }
             res1 = await client.post(container_endpoint, data=container_params)
             data1 = res1.json()
@@ -103,10 +153,10 @@ async def publish_to_instagram(image_url: str, caption: str) -> dict:
             creation_id = data1["id"]
 
             # Step 2: Publish media container
-            publish_endpoint = f"https://graph.facebook.com/v21.0/{ig_user_id}/media_publish"
+            publish_endpoint = f"https://graph.facebook.com/v21.0/{target_ig_id}/media_publish"
             publish_params = {
                 "creation_id": creation_id,
-                "access_token": meta_token
+                "access_token": page_token
             }
             res2 = await client.post(publish_endpoint, data=publish_params)
             data2 = res2.json()
@@ -142,13 +192,16 @@ async def publish_to_facebook(image_url: str, caption: str) -> dict:
     if not image_url or not image_url.startswith("http"):
         return {"success": False, "error": "Valid public HTTPS image URL required for Facebook publication", "platform": "facebook"}
 
+    # Automatically resolve Page Access Token to prevent 'publish_actions' deprecation error
+    page_token, _ = await resolve_meta_context(meta_token, page_id)
+
     try:
         async with httpx.AsyncClient(timeout=45.0) as client:
             photos_endpoint = f"https://graph.facebook.com/v21.0/{page_id}/photos"
             photos_params = {
                 "url": image_url,
                 "caption": caption,
-                "access_token": meta_token
+                "access_token": page_token
             }
             res = await client.post(photos_endpoint, data=photos_params)
             data = res.json()
