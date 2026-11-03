@@ -232,13 +232,6 @@ def create_app(settings: Config | None = None) -> FastAPI:
 
     @app.get("/app.js")
     async def javascript():
-        # Safeguard patch: safely map/filter campaigns whether response is list or object
-        path_js = FRONTEND_DIR / "app.js"
-        if path_js.exists():
-            content = path_js.read_text(encoding="utf-8")
-            content = content.replace("state.campaigns.filter", "(Array.isArray(state.campaigns) ? state.campaigns : (state.campaigns?.campaigns || [])).filter")
-            content = content.replace("campaigns.filter", "(Array.isArray(campaigns) ? campaigns : (campaigns?.campaigns || [])).filter")
-            return Response(content=content, media_type="application/javascript", headers={"Cache-Control": "no-cache"})
         return FileResponse(FRONTEND_DIR / "app.js", media_type="text/javascript", headers={"Cache-Control": "no-cache"})
     
     @app.get("/engine15.html")
@@ -402,7 +395,8 @@ def create_app(settings: Config | None = None) -> FastAPI:
                 return JSONResponse(UPLOADED_ASSETS)
             
             if path in ("v1/campaigns", "campaigns", "api/social/v1/campaigns", "api/social/campaigns"):
-                return JSONResponse({"campaigns": CREATED_CAMPAIGNS})
+                # Frontend expects a raw list `[...]` directly for state.campaigns filter
+                return JSONResponse(CREATED_CAMPAIGNS)
             
             if path.startswith("v1/campaigns/") or path.startswith("campaigns/"):
                 camp_id = path.split("/")[-1]
