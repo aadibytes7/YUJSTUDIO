@@ -34,8 +34,10 @@ SESSION_COOKIE = "yuj_console_session"
 SESSION_SECONDS = 8 * 60 * 60
 SAFE_PATH = re.compile(r"^[a-zA-Z0-9._/-]{1,220}$")
 
-# Store uploaded assets in memory for self-contained mode
+# Store uploaded assets and created campaigns in memory for self-contained mode
 UPLOADED_ASSETS = []
+CREATED_CAMPAIGNS = []
+
 # Method-specific allow-list. The gateway deliberately cannot call arbitrary
 # endpoints, approve via renderer, read credentials, or bypass Social Studio.
 ALLOWED_SOCIAL = {
@@ -96,7 +98,7 @@ class Config:
     allow_http_upstream: bool = False
 
     @classmethod
-    def from_env(cls) -> "Config":
+    from_env(cls) -> "Config":
         return cls(
             social_base_url=os.getenv("SOCIAL_BASE_URL", ""),
             social_api_key=os.getenv("SOCIAL_ADMIN_KEY", ""),
@@ -308,7 +310,7 @@ def create_app(settings: Config | None = None) -> FastAPI:
         url = upstream.rstrip("/") + route
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(25, connect=5), transport=app.state.outbound_transport,
-                                         follow_redirects=False, trust_env=False) as client:
+                                        follow_redirects=False, trust_env=False) as client:
                 r = await client.request(request.method, url, params=request.query_params.multi_items(),
                                          headers=headers, content=raw or None)
         except (httpx.RequestError, httpx.TimeoutException):
@@ -382,17 +384,23 @@ def create_app(settings: Config | None = None) -> FastAPI:
         
         # Self-contained fallback for POST queries when running on a single Render service
         if request.method == "POST" and "campaigns" in path:
-            return JSONResponse({
+            body = await request.json() if request.headers.get("content-type") == "application/json" else {}
+            new_camp = {
                 "id": f"camp_{secrets.token_hex(6)}",
-                "name": "Taxilaauto Campaign",
+                "name": body.get("name", "Taxilaauto Campaign"),
+                "objective": body.get("objective", "Brand Awareness"),
                 "status": "draft",
                 "created_at": time.time()
-            })
+            }
+            CREATED_CAMPAIGNS.append(new_camp)
+            return JSONResponse(new_camp)
 
         # Self-contained fallback for GET queries when running on a single Render service
         if request.method == "GET":
             if "content" in path or "assets" in path:
                 return JSONResponse(UPLOADED_ASSETS)
+            if "campaigns" in path:
+                return JSONResponse(CREATED_CAMPAIGNS)
             if "accounts" in path:
                 page_id = os.getenv("TAXILAAUTO_PAGE_ID", "1253108971222914")
                 return JSONResponse([
@@ -406,11 +414,21 @@ def create_app(settings: Config | None = None) -> FastAPI:
                         "type": "business_page"
                     }
                 ])
-            if any(k in path for k in ["campaigns", "plans", "jobs", "calendar", "analytics", "ops", "metrics", "production"]):
+            if any(k in path for k in ["plans", "jobs", "calendar", "analytics", "ops", "metrics", "production"]):
                 return JSONResponse([] if "overview" not in path and "status" not in path else {})
 
         return await forward(request, valid_upstream(config.social_base_url, config.allow_http_upstream),
                              config.social_api_key, "X-YUJ-Social-Key", ALLOWED_SOCIAL, "/" + path)
+
+    @app.api_route("/api/renderer/{path:path}", methods=["GET", "POST", "PATCH"])
+    @app.get("/api/renderer")
+    async def renderer_proxy(path: str = "", request: Request = None):
+        if not path or path == "capabilities" or "capabilities" in path:
+            return JSONResponse({"status": "ready", "capabilities": ["diffusion", "layout", "export"]})
+        if not config.renderer_base_url:
+            return JSONResponse({"status": "ready", "capabilities": ["diffusion", "layout", "export"]})
+        return await forward(request, valid_upstream(config.renderer_base_url, config.allow_http_upstream),
+                             config.renderer_api_key, "X-YUJ-Renderer-Key", ALLOWED_RENDERER, "/" + path)
     return app
 
 
