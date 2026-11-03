@@ -26,6 +26,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
+from supabase import create_client
 
 ROOT = Path(__file__).resolve().parent
 FRONTEND_DIR = (ROOT.parent / "frontend") if (ROOT.parent / "frontend" / "index.html").exists() else ROOT
@@ -327,20 +328,43 @@ def create_app(settings: Config | None = None) -> FastAPI:
         require_session(request, write=True)
         form = await request.form()
         file = form.get("file") or form.get("asset")
-        filename = file.filename if file else "exported_asset.png"
+        if not file:
+            raise HTTPException(400, "No file uploaded")
+            
+        filename = getattr(file, "filename", "exported_asset.png")
+        file_bytes = await file.read()
+        file_path = f"uploads/{secrets.token_hex(4)}_{filename}"
+        
+        # Initialize Supabase client using environment variables
+        supabase_url = os.getenv("SUPABASE_URL", "https://wztnopehqmufawgkjzya.supabase.co")
+        supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", os.getenv("SUPABASE_KEY", ""))
+        
+        try:
+            supabase = create_client(supabase_url, supabase_key)
+            # Upload directly to your public Supabase storage bucket
+            supabase.storage.from_("social-media-assets").upload(
+                path=file_path,
+                file=file_bytes,
+                file_options={"content-type": getattr(file, "content_type", "image/png"), "upsert": "true"}
+            )
+            # Retrieve public URL from Supabase
+            public_url = supabase.storage.from_("social-media-assets").get_public_url(file_path)
+        except Exception as e:
+            raise HTTPException(500, f"Supabase storage upload failed: {str(e)}")
         
         asset_item = {
             "id": secrets.token_hex(8),
             "title": filename,
             "filename": filename,
-            "url": f"https://yujstudio.onrender.com/assets/{filename}",
+            "url": public_url,
+            "size": len(file_bytes),
             "created_at": time.time()
         }
         UPLOADED_ASSETS.append(asset_item)
         
         return JSONResponse({
             "status": "success",
-            "message": "Asset uploaded and registered successfully",
+            "message": "Asset uploaded to Supabase storage successfully",
             "asset": asset_item
         }, status_code=200)
    
