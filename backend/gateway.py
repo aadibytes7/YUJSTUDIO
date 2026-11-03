@@ -400,7 +400,7 @@ def create_app(settings: Config | None = None) -> FastAPI:
             if "content" in path or "assets" in path:
                 return JSONResponse(UPLOADED_ASSETS)
             if "campaigns" in path:
-                return JSONResponse(CREATED_CAMPAIGNS)
+                return JSONResponse({"campaigns": CREATED_CAMPAIGNS})
             if "accounts" in path:
                 page_id = os.getenv("TAXILAAUTO_PAGE_ID", "1253108971222914")
                 return JSONResponse([
