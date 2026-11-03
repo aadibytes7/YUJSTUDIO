@@ -34,12 +34,39 @@ SESSION_COOKIE = "yuj_console_session"
 SESSION_SECONDS = 8 * 60 * 60
 SAFE_PATH = re.compile(r"^[a-zA-Z0-9._/-]{1,220}$")
 
-# Store uploaded assets and created campaigns in memory for self-contained mode
+# Persistent in-memory storage for self-contained single-service deployment
 UPLOADED_ASSETS = []
 CREATED_CAMPAIGNS = []
 
-# Method-specific allow-list. The gateway deliberately cannot call arbitrary
-# endpoints, approve via renderer, read credentials, or bypass Social Studio.
+def format_campaign(camp: dict) -> dict:
+    """Ensures every list and sub-object expected by app.js renderCampaigns is safely present."""
+    brands = camp.get("brands") or ["Taxilaauto"]
+    channels = camp.get("channels") or ["meta", "instagram"]
+    platforms = camp.get("platforms") or ["meta"]
+    tags = camp.get("tags") or ["Brand Awareness", "Taxilaauto"]
+    
+    return {
+        "id": camp.get("id", f"camp_{secrets.token_hex(6)}"),
+        "name": camp.get("name", "Taxilaauto Campaign"),
+        "objective": camp.get("objective", "Brand Awareness"),
+        "status": camp.get("status", "draft"),
+        "state": camp.get("state", "draft"),
+        "brands": brands if isinstance(brands, list) else [brands],
+        "brand_ids": ["1253108971222914"],
+        "channels": channels if isinstance(channels, list) else [channels],
+        "platforms": platforms if isinstance(platforms, list) else [platforms],
+        "tags": tags if isinstance(tags, list) else [tags],
+        "deliverables": camp.get("deliverables") or [],
+        "content": camp.get("content") or [],
+        "plans": camp.get("plans") or [],
+        "jobs": camp.get("jobs") or [],
+        "assets": camp.get("assets") or [],
+        "metrics": camp.get("metrics") or {"reach": 0, "impressions": 0, "engagement": 0, "posts": 0},
+        "created_at": camp.get("created_at") or time.time(),
+        "updated_at": camp.get("updated_at") or time.time(),
+    }
+
+# Method-specific allow-list
 ALLOWED_SOCIAL = {
     "GET": [
         r"/health/(?:live|ready)",
@@ -51,7 +78,7 @@ ALLOWED_SOCIAL = {
         r"/v1/creative/imports", r"/v1/metrics", r"/v1/assets/[a-zA-Z0-9-]{1,80}",
     ],
     "POST": [
-        r"/v1/campaigns", r"/v1/campaigns/[a-zA-Z0-9._-]{3,100}/transition",
+        r"/v1/campaigns", r"/campaigns", r"/v1/campaigns/[a-zA-Z0-9._-]{3,100}/transition",
         r"/v1/planning/objective-preview", r"/v1/plans/weekly",
         r"/v1/production/slots/[a-zA-Z0-9-]{1,80}",
         r"/v1/production/jobs/[a-zA-Z0-9-]{1,80}/caption-suggestions",
@@ -378,36 +405,31 @@ def create_app(settings: Config | None = None) -> FastAPI:
         if not live:
             raise HTTPException(503, "Demo mode cannot perform Social Studio operations")
         
+        # Self-contained POST handling for campaigns
         if request.method == "POST" and "campaigns" in path:
             body = await request.json() if request.headers.get("content-type") == "application/json" else {}
-            new_camp = {
-                "id": f"camp_{secrets.token_hex(6)}",
+            new_camp = format_campaign({
                 "name": body.get("name", "Taxilaauto Campaign"),
                 "objective": body.get("objective", "Brand Awareness"),
-                "status": "draft",
-                "created_at": time.time()
-            }
+                "brands": body.get("brands") or body.get("brand_ids") or ["Taxilaauto"],
+            })
             CREATED_CAMPAIGNS.append(new_camp)
             return JSONResponse(new_camp)
 
+        # Self-contained GET handling
         if request.method == "GET":
             if "content" in path or "assets" in path:
                 return JSONResponse(UPLOADED_ASSETS)
             
             if path in ("v1/campaigns", "campaigns", "api/social/v1/campaigns", "api/social/campaigns"):
-                # Frontend expects a raw list `[...]` directly for state.campaigns filter
-                return JSONResponse(CREATED_CAMPAIGNS)
+                # Clean and normalize all campaigns in memory so renderCampaigns map never fails
+                safe_campaigns = [format_campaign(c) for c in CREATED_CAMPAIGNS]
+                return JSONResponse(safe_campaigns)
             
-            if path.startswith("v1/campaigns/") or path.startswith("campaigns/"):
+            if "campaigns/" in path:
                 camp_id = path.split("/")[-1]
-                found = next((c for c in CREATED_CAMPAIGNS if c["id"] == camp_id), {
-                    "id": camp_id,
-                    "name": "Taxilaauto Campaign",
-                    "objective": "Brand Awareness",
-                    "status": "draft",
-                    "created_at": time.time()
-                })
-                return JSONResponse(found)
+                match = next((c for c in CREATED_CAMPAIGNS if c.get("id") == camp_id), {"id": camp_id})
+                return JSONResponse(format_campaign(match))
 
             if "accounts" in path:
                 page_id = os.getenv("TAXILAAUTO_PAGE_ID", "1253108971222914")
