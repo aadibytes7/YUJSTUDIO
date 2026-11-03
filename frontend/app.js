@@ -105,6 +105,18 @@ const timeLabel = v => v ? new Date(v).toLocaleString('en-IN', {
   day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata'
 }) : 'Unscheduled';
 
+const timeAgo = (v) => {
+  if (!v) return 'Recent';
+  const diff = Math.max(0, Date.now() - new Date(v).getTime());
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+};
+
 const localISO = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 const startWeek = d => {
@@ -139,6 +151,16 @@ const env = {
 
 const state = {
   page: 'overview',
+  pulsePeriod: '30', // '7' | '30' | '90'
+  pulseHoverIndex: null,
+  pulseLoading: false,
+  pulseError: null,
+  perfPeriod: '30', // '7' | '30' | '90'
+  perfPlatform: 'all', // 'all' | 'instagram' | 'facebook' | 'linkedin' | 'tiktok' | 'youtube'
+  perfCampaign: '', // campaign id or '' for all
+  perfLoading: false,
+  perfError: null,
+  perfHoverIndex: null,
   theme: 'dark',
   sidebarCollapsed: false,
   busy: false,
@@ -714,10 +736,18 @@ function demoInsights() {
   };
 }
 
-// -------------------------------------------------------------------------
+// --------------------------------------------------------------------------
 // 5. GATEWAY CLIENT (LIVE REST / CORS ISOLATION)
-// -------------------------------------------------------------------------
-const API_BASE_URL = 'https://yujstudio.onrender.com';
+// --------------------------------------------------------------------------
+const API_BASE_URL = (() => {
+  if (typeof window !== 'undefined' && window.location?.hostname) {
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') return '';
+  }
+  if (typeof location !== 'undefined' && location.hostname) {
+    if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') return '';
+  }
+  return 'https://yujstudio.onrender.com';
+})();
 
 async function gatewayFetch(path, options = {}) {
   const headers = { ...(options.headers || {}) };
@@ -743,7 +773,7 @@ async function gatewayFetch(path, options = {}) {
       credentials: 'include',
       cache: 'no-store'
     });
-  } catch (err) {
+  } catch {
     throw new Error('Cannot reach the YUJ console gateway. Check that the server is running.');
   }
 
@@ -762,11 +792,7 @@ async function gatewayFetch(path, options = {}) {
   let body = null;
   const type = res.headers?.get('content-type') || '';
   try {
-    if (type.includes('json')) {
-      body = await res.json();
-    } else {
-      body = await res.text();
-    }
+    body = type.includes('json') ? await res.json() : await res.text();
   } catch {
     body = null;
   }
@@ -802,7 +828,10 @@ async function boot() {
 
   try {
     if (typeof location !== 'undefined' && location.protocol !== 'file:') {
-      const res = await fetch('https://yujstudio.onrender.com/api/config', { credentials: 'include', cache: 'no-store' });
+      const configUrl = (typeof API_BASE_URL !== 'undefined' && API_BASE_URL)
+        ? `${API_BASE_URL}/api/config`
+        : '/api/config';
+      const res = await fetch(configUrl, { credentials: 'include', cache: 'no-store' });
       if (res.ok) {
         const v = await res.json();
         env.mode = v.mode === 'live' ? 'live' : 'demo';
@@ -814,9 +843,9 @@ async function boot() {
 
   if (env.mode === 'live') {
     try {
-      const ses = await gatewayFetch('https://yujstudio.onrender.com/api/session');
-      state.csrf = ses.csrf || '';
-      if (!ses.authenticated) {
+      const ses = await gatewayFetch('/api/session');
+      state.csrf = ses?.csrf || '';
+      if (!ses?.authenticated) {
         $('loginOverlay')?.classList.remove('hidden');
         return;
       }
@@ -1089,11 +1118,430 @@ function empty(title, subtitle, action = '') {
 // --------------------------------------------------------------------------
 // 8. SCREEN 1: COMMAND CENTER (FLAGSHIP DASHBOARD)
 // --------------------------------------------------------------------------
+
+// --------------------------------------------------------------------------
+// DYNAMIC SVG SPLINE & ANALYTICAL AGGREGATION
+// --------------------------------------------------------------------------
+function makeSvgPath(pts) {
+  if (!pts || pts.length === 0) return '';
+  if (pts.length === 1) return `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+  let path = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i === 0 ? i : i - 1];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2 < pts.length ? i + 2 : i + 1];
+
+    const cp1x = p1[0] + (p2[0] - p0[0]) / 6;
+    const cp1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const cp2x = p2[0] - (p3[0] - p1[0]) / 6;
+    const cp2y = p2[1] - (p3[1] - p1[1]) / 6;
+
+    path += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
+  }
+  return path;
+}
+
+function getAggregatedAnalytics() {
+  const isDemoMode = isDemo();
+  const days = Number(state.perfPeriod || state.analyticsPeriodDays || 30);
+  const platformFilter = (state.perfPlatform || 'all').toLowerCase();
+  const campaignFilter = state.perfCampaign || '';
+
+  const insight = state.insights || {};
+  let rawGroups = Array.isArray(insight.groups) ? insight.groups : [];
+  let rawTimeSeries = Array.isArray(insight.time_series) ? insight.time_series : [];
+  let rawPosts = Array.isArray(insight.posts) ? insight.posts : [];
+
+  if (!isDemoMode && rawTimeSeries.length === 0 && Array.isArray(state.jobs)) {
+    const nowMs = Date.now();
+    const cutoffMs = nowMs - days * 24 * 60 * 60 * 1000;
+    const dailyMap = new Map();
+
+    state.jobs.forEach(j => {
+      if (j.status === 'published' && j.published_at) {
+        const postTime = new Date(j.published_at).getTime();
+        if (postTime >= cutoffMs) {
+          const dateStr = new Date(j.published_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+          if (!dailyMap.has(dateStr)) {
+            dailyMap.set(dateStr, { date: dateStr, reach: 0, views: 0, engagements: 0, count: 0 });
+          }
+          const item = dailyMap.get(dateStr);
+          item.count++;
+          if (j.metrics) {
+            item.reach += Number(j.metrics.reach) || 0;
+            item.views += Number(j.metrics.views) || 0;
+            item.engagements += (Number(j.metrics.likes) || 0) + (Number(j.metrics.comments) || 0) + (Number(j.metrics.shares) || 0) + (Number(j.metrics.saved) || 0);
+          }
+        }
+      }
+    });
+    rawTimeSeries = Array.from(dailyMap.values());
+  }
+
+  let filteredGroups = rawGroups;
+  if (platformFilter !== 'all') {
+    filteredGroups = filteredGroups.filter(g => (g.platform || '').toLowerCase() === platformFilter);
+  }
+  if (campaignFilter) {
+    const targetCampaign = state.campaigns.find(c => c.id === campaignFilter);
+    if (targetCampaign && Array.isArray(targetCampaign.brands)) {
+      filteredGroups = filteredGroups.filter(g => targetCampaign.brands.includes(g.brand));
+    }
+  }
+
+  let totalViews = 0;
+  let totalReach = 0;
+  let totalLikes = 0;
+  let totalComments = 0;
+  let totalSaved = 0;
+  let totalShares = 0;
+  let hasObservedViews = false;
+  let hasObservedReach = false;
+
+  filteredGroups.forEach(g => {
+    const m = g.metrics || {};
+    if (m.views?.total_observed != null) {
+      totalViews += m.views.total_observed;
+      hasObservedViews = true;
+    }
+    if (m.reach?.total_observed != null) {
+      totalReach += m.reach.total_observed;
+      hasObservedReach = true;
+    }
+    if (m.likes?.total_observed != null) totalLikes += m.likes.total_observed;
+    if (m.comments?.total_observed != null) totalComments += m.comments.total_observed;
+    if (m.saved?.total_observed != null) totalSaved += m.saved.total_observed;
+    if (m.shares?.total_observed != null) totalShares += m.shares.total_observed;
+  });
+
+  const totalEngagements = totalLikes + totalComments + totalSaved + totalShares;
+  const engagementRate = (hasObservedViews && totalViews > 0)
+    ? ((totalEngagements / totalViews) * 100).toFixed(2) + '%'
+    : (hasObservedViews ? '0.00%' : '—');
+
+  let timeSeries = rawTimeSeries;
+  if (days <= 7) {
+    timeSeries = timeSeries.slice(-4);
+  } else if (days <= 30) {
+    timeSeries = timeSeries.slice(-8);
+  }
+
+  let filteredPosts = rawPosts;
+  if (platformFilter !== 'all') {
+    filteredPosts = filteredPosts.filter(p => (p.platform || '').toLowerCase() === platformFilter);
+  }
+  if (campaignFilter) {
+    const targetCampaign = state.campaigns.find(c => c.id === campaignFilter);
+    if (targetCampaign) {
+      filteredPosts = filteredPosts.filter(p => p.campaign_id === campaignFilter || (targetCampaign.brands || []).includes(p.brand));
+    }
+  }
+
+  const allCaptions = (state.content || []).map(c => c.caption || '').join(' ');
+  const hashtagMatches = allCaptions.match(/#[a-zA-Z0-9_]+/g) || [];
+  const hashtagCounts = new Map();
+  hashtagMatches.forEach(tag => {
+    hashtagCounts.set(tag, (hashtagCounts.get(tag) || 0) + 1);
+  });
+  const topHashtags = Array.from(hashtagCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([tag, count]) => ({ tag, count }));
+
+  const platformMap = new Map();
+  filteredGroups.forEach(g => {
+    const p = (g.platform || 'other').toLowerCase();
+    const reach = Number(g.metrics?.reach?.total_observed) || 0;
+    const posts = Number(g.published_posts) || 0;
+    const prev = platformMap.get(p) || { reach: 0, posts: 0 };
+    platformMap.set(p, { reach: prev.reach + reach, posts: prev.posts + posts });
+  });
+
+  const platformBreakdown = Array.from(platformMap.entries()).map(([platform, data]) => {
+    const pct = (hasObservedReach && totalReach > 0) ? ((data.reach / totalReach) * 100).toFixed(1) : '0';
+    return { platform, reach: data.reach, posts: data.posts, percentage: pct };
+  });
+
+  const brandMap = new Map();
+  (state.content || []).forEach(c => {
+    const b = c.brand || 'other';
+    brandMap.set(b, (brandMap.get(b) || 0) + 1);
+  });
+  const totalContentCount = state.content?.length || 1;
+  const brandBreakdown = Array.from(brandMap.entries()).map(([brand, count]) => ({
+    brand,
+    count,
+    percentage: ((count / totalContentCount) * 100).toFixed(1)
+  })).sort((a, b) => b.count - a.count);
+
+  return {
+    days,
+    platformFilter,
+    campaignFilter,
+    totalViews: hasObservedViews ? totalViews : null,
+    totalReach: hasObservedReach ? totalReach : null,
+    totalEngagements,
+    engagementRate,
+    totalLikes,
+    totalComments,
+    totalSaved,
+    totalShares,
+    groups: filteredGroups,
+    timeSeries,
+    posts: filteredPosts,
+    topHashtags,
+    platformBreakdown,
+    brandBreakdown
+  };
+}
+
+function renderPulseChart() {
+  const analytics = getAggregatedAnalytics();
+  const pts = analytics.timeSeries || [];
+
+  if (state.pulseLoading) {
+    return `
+      <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:200px; gap:12px; color:var(--text-dim);">
+        <div style="width:28px; height:28px; border:2.5px solid #232C3A; border-top-color:#FF873E; border-radius:50%; animation:spin 0.8s linear infinite;"></div>
+        <span style="font-size:13px;">Fetching real-time operations telemetry...</span>
+      </div>
+    `;
+  }
+
+  if (state.pulseError) {
+    return `
+      <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:200px; gap:10px; color:#F15B66; text-align:center; padding:16px;">
+        <span style="font-size:14px; font-weight:600;">${e(state.pulseError)}</span>
+        <button class="btn btn-sm btn-subtle" data-action="refresh">${icon('refresh')} Retry Connection</button>
+      </div>
+    `;
+  }
+
+  if (pts.length === 0) {
+    return `
+      <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:200px; gap:8px; color:var(--text-dim); text-align:center; padding:20px;">
+        <span style="font-size:14px; font-weight:600; color:var(--text);">No Telemetry Recorded</span>
+        <span style="font-size:13px; max-width:440px;">No performance records observed for the selected ${state.pulsePeriod || 30}-day window. New posts will show reach and views once published and measured.</span>
+      </div>
+    `;
+  }
+
+  const maxReach = Math.max(...pts.map(p => Number(p.reach) || 0), 0);
+  const maxViews = Math.max(...pts.map(p => Number(p.views) || 0), 0);
+  const peak = Math.max(maxReach, maxViews, 100);
+  const factor = Math.pow(10, Math.floor(Math.log10(peak)));
+  const maxVal = Math.ceil((peak * 1.15) / factor) * factor;
+
+  const yTicks = [
+    { val: maxVal, label: maxVal >= 1000 ? (maxVal / 1000).toFixed(maxVal % 1000 === 0 ? 0 : 1) + 'k' : String(maxVal), y: 20 },
+    { val: Math.round(maxVal * 0.66), label: Math.round(maxVal * 0.66) >= 1000 ? (Math.round(maxVal * 0.66) / 1000).toFixed(1) + 'k' : String(Math.round(maxVal * 0.66)), y: 70 },
+    { val: Math.round(maxVal * 0.33), label: Math.round(maxVal * 0.33) >= 1000 ? (Math.round(maxVal * 0.33) / 1000).toFixed(1) + 'k' : String(Math.round(maxVal * 0.33)), y: 120 },
+    { val: 0, label: '0', y: 170 }
+  ];
+
+  const plotLeft = 60;
+  const plotRight = 970;
+  const plotWidth = plotRight - plotLeft;
+  const baseY = 170;
+  const topY = 20;
+  const plotHeight = baseY - topY;
+
+  const coords = pts.map((p, i) => {
+    const x = pts.length === 1 ? (plotLeft + plotRight) / 2 : plotLeft + (i / (pts.length - 1)) * plotWidth;
+    const yReach = baseY - ((Number(p.reach) || 0) / maxVal) * plotHeight;
+    const yViews = baseY - ((Number(p.views) || 0) / maxVal) * plotHeight;
+    return { ...p, x, yReach, yViews, index: i };
+  });
+
+  const reachLine = coords.length === 1 ? `M ${coords[0].x - 20} ${coords[0].yReach} L ${coords[0].x + 20} ${coords[0].yReach}` : makeSvgPath(coords.map(c => [c.x, c.yReach]));
+  const viewsLine = coords.length === 1 ? `M ${coords[0].x - 20} ${coords[0].yViews} L ${coords[0].x + 20} ${coords[0].yViews}` : makeSvgPath(coords.map(c => [c.x, c.yViews]));
+
+  const reachArea = coords.length === 1
+    ? `M ${coords[0].x - 20} ${coords[0].yReach} L ${coords[0].x + 20} ${coords[0].yReach} L ${coords[0].x + 20} ${baseY} L ${coords[0].x - 20} ${baseY} Z`
+    : `${reachLine} L ${coords[coords.length - 1].x} ${baseY} L ${coords[0].x} ${baseY} Z`;
+  const viewsArea = coords.length === 1
+    ? `M ${coords[0].x - 20} ${coords[0].yViews} L ${coords[0].x + 20} ${coords[0].yViews} L ${coords[0].x + 20} ${baseY} L ${coords[0].x - 20} ${baseY} Z`
+    : `${viewsLine} L ${coords[coords.length - 1].x} ${baseY} L ${coords[0].x} ${baseY} Z`;
+
+  const activeIdx = (state.pulseHoverIndex != null && state.pulseHoverIndex >= 0 && state.pulseHoverIndex < coords.length)
+    ? state.pulseHoverIndex
+    : Math.max(0, coords.length - 2);
+  const activePt = coords[activeIdx] || coords[0];
+  const tooltipLeftPct = Math.max(12, Math.min(88, (activePt.x / 1000) * 100));
+
+  return `
+    <div class="pulse-tooltip-box" id="pulseTooltipBox" style="left:${tooltipLeftPct}%; top:${Math.max(12, Math.min(activePt.yReach, activePt.yViews) - 48)}px; transform:translateX(-50%); transition:left 0.15s ease, top 0.15s ease;">
+      <div class="pulse-tooltip-date" id="pulseTooltipDate">${e(activePt.date)}</div>
+      <div class="pulse-tooltip-row"><span class="legend-bullet" style="background:#FF873E;"></span> Reach: <b id="pulseTooltipReach">${formatNumber(activePt.reach)}</b></div>
+      <div class="pulse-tooltip-row"><span class="legend-bullet" style="background:#27C7C1;"></span> Views: <b id="pulseTooltipViews">${formatNumber(activePt.views)}</b></div>
+    </div>
+
+    <svg viewBox="0 0 1000 200" preserveAspectRatio="none" style="width:100%; height:100%; overflow:visible;">
+      <defs>
+        <linearGradient id="pulseGradOrange" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#FF873E" stop-opacity="0.30" />
+          <stop offset="100%" stop-color="#FF873E" stop-opacity="0.0" />
+        </linearGradient>
+        <linearGradient id="pulseGradTeal" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#27C7C1" stop-opacity="0.25" />
+          <stop offset="100%" stop-color="#27C7C1" stop-opacity="0.0" />
+        </linearGradient>
+        <filter id="glowOrange" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur stdDeviation="3" result="blur" />
+          <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+        </filter>
+        <filter id="glowTeal" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur stdDeviation="3" result="blur" />
+          <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+        </filter>
+      </defs>
+
+      ${yTicks.map(t => `
+        <line x1="${plotLeft}" y1="${t.y}" x2="${plotRight}" y2="${t.y}" stroke="#232C3A" stroke-dasharray="${t.y === baseY ? 'none' : '3,3'}" />
+        <text x="${plotLeft - 15}" y="${t.y + 4}" fill="#818D9D" font-size="11" text-anchor="end">${e(t.label)}</text>
+      `).join('')}
+
+      ${coords.map(c => `
+        <text x="${c.x}" y="194" fill="#818D9D" font-size="11" text-anchor="middle">${e(c.date)}</text>
+      `).join('')}
+
+      <path d="${reachArea}" fill="url(#pulseGradOrange)" />
+      <path d="${viewsArea}" fill="url(#pulseGradTeal)" />
+
+      <path d="${reachLine}" fill="none" stroke="#FF873E" stroke-width="2.6" filter="url(#glowOrange)" />
+      <path d="${viewsLine}" fill="none" stroke="#27C7C1" stroke-width="2.6" filter="url(#glowTeal)" />
+
+      ${coords.map((c, i) => `
+        <g class="pulse-point-group" data-action="pulse-hover-point" data-index="${i}" data-date="${e(c.date)}" data-reach="${c.reach}" data-views="${c.views}" data-x="${c.x}" data-y="${Math.min(c.yReach, c.yViews)}" style="cursor:pointer;">
+          <circle cx="${c.x}" cy="${c.yReach}" r="${i === activeIdx ? '6' : '4'}" fill="${i === activeIdx ? '#FF873E' : '#0B0E13'}" stroke="#FF873E" stroke-width="${i === activeIdx ? '3' : '2.5'}" />
+          <circle cx="${c.x}" cy="${c.yViews}" r="${i === activeIdx ? '6' : '4'}" fill="${i === activeIdx ? '#27C7C1' : '#0B0E13'}" stroke="#27C7C1" stroke-width="${i === activeIdx ? '3' : '2.5'}" />
+          <rect x="${c.x - 24}" y="10" width="48" height="170" fill="transparent" />
+        </g>
+      `).join('')}
+    </svg>
+  `;
+}
+
+function renderPerformanceTrendChart(analytics) {
+  const pts = analytics.timeSeries || [];
+
+  if (state.perfLoading) {
+    return `
+      <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:160px; gap:10px; color:#818D9D;">
+        <div style="width:24px; height:24px; border:2.5px solid #202834; border-top-color:#FF793D; border-radius:50%; animation:spin 0.8s linear infinite;"></div>
+        <span style="font-size:12px;">Updating performance telemetry...</span>
+      </div>
+    `;
+  }
+
+  if (pts.length === 0) {
+    return `
+      <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:160px; gap:6px; color:#6C7A8D; text-align:center; padding:16px;">
+        <span style="font-size:13px; font-weight:600; color:#F3F5F7;">No Daily Insights Recorded</span>
+        <span style="font-size:12px;">Publish and measure posts to view daily engagement trends.</span>
+      </div>
+    `;
+  }
+
+  const maxEng = Math.max(...pts.map(p => Number(p.engagements || (p.likes + p.comments + p.saved + p.shares)) || 0), 0);
+  const maxViews = Math.max(...pts.map(p => Number(p.views) || 0), 0);
+  const peak = Math.max(maxEng, maxViews, 100);
+  const factor = Math.pow(10, Math.floor(Math.log10(peak)));
+  const maxVal = Math.ceil((peak * 1.15) / factor) * factor;
+
+  const yTicks = [
+    { val: maxVal, label: maxVal >= 1000 ? (maxVal / 1000).toFixed(maxVal % 1000 === 0 ? 0 : 1) + 'k' : String(maxVal), y: 20 },
+    { val: Math.round(maxVal * 0.66), label: Math.round(maxVal * 0.66) >= 1000 ? (Math.round(maxVal * 0.66) / 1000).toFixed(1) + 'k' : String(Math.round(maxVal * 0.66)), y: 55 },
+    { val: Math.round(maxVal * 0.33), label: Math.round(maxVal * 0.33) >= 1000 ? (Math.round(maxVal * 0.33) / 1000).toFixed(1) + 'k' : String(Math.round(maxVal * 0.33)), y: 95 },
+    { val: 0, label: '0', y: 135 }
+  ];
+
+  const plotLeft = 40;
+  const plotRight = 515;
+  const plotWidth = plotRight - plotLeft;
+  const baseY = 135;
+  const topY = 20;
+  const plotHeight = baseY - topY;
+
+  const coords = pts.map((p, i) => {
+    const x = pts.length === 1 ? (plotLeft + plotRight) / 2 : plotLeft + (i / (pts.length - 1)) * plotWidth;
+    const engVal = Number(p.engagements || (p.likes + p.comments + p.saved + p.shares)) || 0;
+    const yEng = baseY - (engVal / maxVal) * plotHeight;
+    const yViews = baseY - ((Number(p.views) || 0) / maxVal) * plotHeight;
+    return { ...p, engVal, x, yEng, yViews, index: i };
+  });
+
+  const engLine = coords.length === 1 ? `M ${coords[0].x - 15} ${coords[0].yEng} L ${coords[0].x + 15} ${coords[0].yEng}` : makeSvgPath(coords.map(c => [c.x, c.yEng]));
+  const viewsLine = coords.length === 1 ? `M ${coords[0].x - 15} ${coords[0].yViews} L ${coords[0].x + 15} ${coords[0].yViews}` : makeSvgPath(coords.map(c => [c.x, c.yViews]));
+
+  const engArea = coords.length === 1
+    ? `M ${coords[0].x - 15} ${coords[0].yEng} L ${coords[0].x + 15} ${coords[0].yEng} L ${coords[0].x + 15} ${baseY} L ${coords[0].x - 15} ${baseY} Z`
+    : `${engLine} L ${coords[coords.length - 1].x} ${baseY} L ${coords[0].x} ${baseY} Z`;
+  const viewsArea = coords.length === 1
+    ? `M ${coords[0].x - 15} ${coords[0].yViews} L ${coords[0].x + 15} ${coords[0].yViews} L ${coords[0].x + 15} ${baseY} L ${coords[0].x - 15} ${baseY} Z`
+    : `${viewsLine} L ${coords[coords.length - 1].x} ${baseY} L ${coords[0].x} ${baseY} Z`;
+
+  const activeIdx = (state.perfHoverIndex != null && state.perfHoverIndex >= 0 && state.perfHoverIndex < coords.length)
+    ? state.perfHoverIndex
+    : Math.max(0, coords.length - 2);
+  const activePt = coords[activeIdx] || coords[0];
+  const tooltipLeftPct = Math.max(14, Math.min(86, (activePt.x / 540) * 100));
+
+  return `
+    <div style="position:relative; width:100%; height:160px;">
+      <div id="perfTrendTooltip" style="position:absolute; left:${tooltipLeftPct}%; top:${Math.max(6, Math.min(activePt.yEng, activePt.yViews) - 38)}px; transform:translateX(-50%); background:#151B26; border:1px solid #293444; border-radius:6px; padding:6px 10px; font-size:11px; box-shadow:0 6px 20px rgba(0,0,0,0.6); pointer-events:none; z-index:10; white-space:nowrap; transition:left 0.15s ease, top 0.15s ease;">
+        <div style="color:#6C7A8D; font-weight:700; margin-bottom:2px;">${e(activePt.date)}</div>
+        <div style="color:#FF793D; font-weight:700;">● Eng: ${formatNumber(activePt.engVal)}</div>
+        <div style="color:#16B8E8; font-weight:700;">● Views: ${formatNumber(activePt.views)}</div>
+      </div>
+
+      <svg viewBox="0 0 540 160" preserveAspectRatio="none" style="width:100%; height:100%; overflow:visible;">
+        <defs>
+          <linearGradient id="trendGradOrange" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#FF793D" stop-opacity="0.30" />
+            <stop offset="100%" stop-color="#FF793D" stop-opacity="0.0" />
+          </linearGradient>
+          <linearGradient id="trendGradCyan" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#16B8E8" stop-opacity="0.25" />
+            <stop offset="100%" stop-color="#16B8E8" stop-opacity="0.0" />
+          </linearGradient>
+        </defs>
+
+        ${yTicks.map(t => `
+          <line x1="${plotLeft}" y1="${t.y}" x2="${plotRight}" y2="${t.y}" stroke="#202834" stroke-dasharray="${t.y === baseY ? 'none' : '2,2'}" />
+          <text x="${plotLeft - 8}" y="${t.y + 4}" fill="#6C7A8D" font-size="10" text-anchor="end">${e(t.label)}</text>
+        `).join('')}
+
+        ${coords.map(c => `
+          <text x="${c.x}" y="152" fill="#6C7A8D" font-size="10" text-anchor="middle">${e(c.date)}</text>
+        `).join('')}
+
+        <path d="${engArea}" fill="url(#trendGradOrange)" />
+        <path d="${viewsArea}" fill="url(#trendGradCyan)" />
+
+        <path d="${engLine}" fill="none" stroke="#FF793D" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+        <path d="${viewsLine}" fill="none" stroke="#16B8E8" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+
+        ${coords.map((c, i) => `
+          <g class="perf-point-group" data-action="perf-hover-point" data-index="${i}" data-date="${e(c.date)}" data-eng="${c.engVal}" data-views="${c.views}" data-x="${c.x}" data-y="${Math.min(c.yEng, c.yViews)}" style="cursor:pointer;">
+            <circle cx="${c.x}" cy="${c.yEng}" r="${i === activeIdx ? '5' : '3.5'}" fill="${i === activeIdx ? '#FF793D' : '#0D1119'}" stroke="#FF793D" stroke-width="${i === activeIdx ? '2.5' : '2'}" />
+            <circle cx="${c.x}" cy="${c.yViews}" r="${i === activeIdx ? '5' : '3.5'}" fill="${i === activeIdx ? '#16B8E8' : '#0D1119'}" stroke="#16B8E8" stroke-width="${i === activeIdx ? '2.5' : '2'}" />
+            <rect x="${c.x - 16}" y="10" width="32" height="130" fill="transparent" />
+          </g>
+        `).join('')}
+      </svg>
+    </div>
+  `;
+}
+
 function renderOverview() {
   const active = state.campaigns.filter(c => c.status === 'active').length;
   const drafts = state.content.filter(c => c.status === 'draft').length;
   const inQueue = state.production.filter(p => ['queued', 'waiting_import', 'dispatched', 'retry', 'rendering', 'accepted'].includes(p.status)).length;
   const scheduled = state.jobs.filter(j => ['scheduled', 'retry'].includes(j.status)).length;
+  const totalSlots = state.plans.reduce((acc, p) => acc + (p.slots ? p.slots.length : 0), 0);
+  const activeStage = drafts > 0 ? 4 : (inQueue > 0 ? 3 : (scheduled > 0 ? 5 : 1));
 
   const greeting = (() => {
     const hr = new Date().getHours();
@@ -1103,6 +1551,15 @@ function renderOverview() {
   })();
 
   const draftsList = state.content.filter(c => c.status === 'draft');
+  const featuredDraft = draftsList[0] || state.content[0];
+  const featuredJob = state.production[0];
+  const featuredCampaign = featuredDraft ? state.campaigns.find(c => c.id === featuredDraft.campaign_id) : (featuredJob ? state.campaigns.find(c => c.id === featuredJob.campaign_id) : null);
+  const featuredBrand = featuredDraft?.brand || featuredJob?.brand || featuredCampaign?.brands?.[0] || 'yuj-foundation';
+  const featuredTitle = featuredCampaign ? featuredCampaign.name : (featuredDraft?.text ? trunc(featuredDraft.text, 44) : (featuredJob ? 'Creative Production #' + trunc(featuredJob.id, 16) : 'Creative Production Asset'));
+  const featuredSub = featuredDraft?.platform ? `${featuredDraft.platform.toUpperCase()} · ${featuredDraft.status === 'draft' ? 'Draft Awaiting Review' : 'Active Content'}` : 'Multi-Channel Asset';
+  const featuredPlatform = featuredDraft?.platform || featuredJob?.platform || 'instagram';
+  const featuredThumb = (featuredDraft ? previewUrl(featuredDraft) : null) || (env.mode === 'demo' ? 'assets/engine15-sample.png' : '');
+  const pendingDecisions = draftsList.slice(0, 3);
 
   // Mini sparklines for KPI command cards
   const sparklineUp = (color) => `
@@ -1214,84 +1671,13 @@ function renderOverview() {
           </div>
         </div>
         <div class="pulse-controls">
-          <button class="btn btn-sm btn-subtle" data-action="pulse-filter">${icon('calendar')} Last 30 Days ▾</button>
+          <span class="pulse-sync-pill"><span class="pulse-sync-dot"></span> Live Telemetry</span>
+          <button class="btn btn-sm btn-subtle" data-action="pulse-filter">${icon('calendar')} Last ${state.pulsePeriod || 30} Days ▾</button>
         </div>
       </div>
 
       <div class="pulse-chart-container">
-        <!-- Pinned Interactive Hover Tooltip at Sep 21 -->
-        <div class="pulse-tooltip-box">
-          <div class="pulse-tooltip-date">Sep 21, 2025</div>
-          <div class="pulse-tooltip-row"><span class="legend-bullet" style="background:#FF873E;"></span> Reach: 2,480</div>
-          <div class="pulse-tooltip-row"><span class="legend-bullet" style="background:#27C7C1;"></span> Views: 3,120</div>
-        </div>
-
-        <svg viewBox="0 0 1000 200" preserveAspectRatio="none" style="width:100%; height:100%; overflow:visible;">
-          <defs>
-            <linearGradient id="pulseGradOrange" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="#FF873E" stop-opacity="0.30" />
-              <stop offset="100%" stop-color="#FF873E" stop-opacity="0.0" />
-            </linearGradient>
-            <linearGradient id="pulseGradTeal" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="#27C7C1" stop-opacity="0.25" />
-              <stop offset="100%" stop-color="#27C7C1" stop-opacity="0.0" />
-            </linearGradient>
-            <filter id="glowOrange" x="-20%" y="-20%" width="140%" height="140%">
-              <feGaussianBlur stdDeviation="3" result="blur" />
-              <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-            </filter>
-            <filter id="glowTeal" x="-20%" y="-20%" width="140%" height="140%">
-              <feGaussianBlur stdDeviation="3" result="blur" />
-              <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-            </filter>
-          </defs>
-
-          <!-- Horizontal Grid Lines -->
-          <line x1="50" y1="20" x2="980" y2="20" stroke="#232C3A" stroke-dasharray="3,3" />
-          <text x="35" y="24" fill="#818D9D" font-size="11" text-anchor="end">3k</text>
-
-          <line x1="50" y1="70" x2="980" y2="70" stroke="#232C3A" stroke-dasharray="3,3" />
-          <text x="35" y="74" fill="#818D9D" font-size="11" text-anchor="end">2k</text>
-
-          <line x1="50" y1="120" x2="980" y2="120" stroke="#232C3A" stroke-dasharray="3,3" />
-          <text x="35" y="124" fill="#818D9D" font-size="11" text-anchor="end">1k</text>
-
-          <line x1="50" y1="170" x2="980" y2="170" stroke="#232C3A" />
-          <text x="35" y="174" fill="#818D9D" font-size="11" text-anchor="end">0</text>
-
-          <!-- X-Axis Labels -->
-          <text x="50" y="194" fill="#818D9D" font-size="11">Sep 1</text>
-          <text x="270" y="194" fill="#818D9D" font-size="11">Sep 7</text>
-          <text x="500" y="194" fill="#818D9D" font-size="11">Sep 14</text>
-          <text x="730" y="194" fill="#818D9D" font-size="11">Sep 21</text>
-          <text x="960" y="194" fill="#818D9D" font-size="11" text-anchor="end">Sep 30</text>
-
-          <!-- Area Fills -->
-          <path d="M 50 145 C 160 120, 220 90, 270 95 C 360 105, 430 110, 500 115 C 600 120, 670 45, 730 46 C 790 47, 850 110, 960 70 L 960 170 L 50 170 Z" fill="url(#pulseGradOrange)" />
-          <path d="M 50 135 C 160 85, 230 125, 270 110 C 350 85, 430 90, 500 80 C 600 70, 670 65, 730 55 C 800 45, 870 95, 960 85 L 960 170 L 50 170 Z" fill="url(#pulseGradTeal)" />
-
-          <!-- Curves -->
-          <path d="M 50 145 C 160 120, 220 90, 270 95 C 360 105, 430 110, 500 115 C 600 120, 670 45, 730 46 C 790 47, 850 110, 960 70" fill="none" stroke="#FF873E" stroke-width="2.6" filter="url(#glowOrange)" />
-          <path d="M 50 135 C 160 85, 230 125, 270 110 C 350 85, 430 90, 500 80 C 600 70, 670 65, 730 55 C 800 45, 870 95, 960 85" fill="none" stroke="#27C7C1" stroke-width="2.6" filter="url(#glowTeal)" />
-
-          <!-- Data Points -->
-          <circle cx="50" cy="145" r="4" fill="#0B0E13" stroke="#FF873E" stroke-width="2.5" />
-          <circle cx="270" cy="95" r="4" fill="#0B0E13" stroke="#FF873E" stroke-width="2.5" />
-          <circle cx="500" cy="115" r="4" fill="#0B0E13" stroke="#FF873E" stroke-width="2.5" />
-          <circle cx="730" cy="46" r="5" fill="#FF873E" stroke="#fff" stroke-width="2" />
-          <circle cx="960" cy="70" r="4" fill="#0B0E13" stroke="#FF873E" stroke-width="2.5" />
-
-          <circle cx="50" cy="135" r="4" fill="#0B0E13" stroke="#27C7C1" stroke-width="2.5" />
-          <circle cx="270" cy="110" r="4" fill="#0B0E13" stroke="#27C7C1" stroke-width="2.5" />
-          <circle cx="500" cy="80" r="4" fill="#0B0E13" stroke="#27C7C1" stroke-width="2.5" />
-          <circle cx="730" cy="55" r="5" fill="#27C7C1" stroke="#fff" stroke-width="2" />
-          <circle cx="960" cy="85" r="4" fill="#0B0E13" stroke="#27C7C1" stroke-width="2.5" />
-        </svg>
-      </div>
-
-      <div class="pulse-legend-strip">
-        <span><span class="legend-bullet" style="background:#FF873E;"></span> Reach</span>
-        <span><span class="legend-bullet" style="background:#27C7C1;"></span> Views</span>
+        ${renderPulseChart()}
       </div>
     </div>
 
@@ -1301,7 +1687,7 @@ function renderOverview() {
         <div class="pipeline-track-icon">${icon('layers')}</div>
         <div class="pipeline-track-title">
           <h3>End-to-End Marketing Pipeline</h3>
-          <p>Track your content journey in real-time</p>
+          <p>Track your content journey in real-time across execution stages</p>
         </div>
       </div>
 
@@ -1309,57 +1695,62 @@ function renderOverview() {
         <div class="pipeline-connecting-wire"></div>
 
         <!-- Stage 1 -->
-        <div class="pipeline-step-node" data-action="navigate" data-target="campaigns" title="Go to Brief & Strategy">
+        <div class="pipeline-step-node ${activeStage === 1 ? 'active-stage' : ''}" data-action="navigate" data-target="campaigns" title="Go to Brief & Strategy">
           <div class="pipeline-node-icon" style="background: linear-gradient(135deg, #FF873E, #E06822);">
             ${icon('edit')}
           </div>
           <div class="pipeline-node-text">
             <strong>1. Brief & Strategy</strong>
-            <small>${active} Active</small>
+            <small>${formatNumber(active)} Active</small>
+            <span class="pipeline-node-badge ${activeStage === 1 ? 'active' : 'idle'}">${activeStage === 1 ? 'Active Stage' : `${formatNumber(state.campaigns.length)} Total`}</span>
           </div>
         </div>
 
         <!-- Stage 2 -->
-        <div class="pipeline-step-node" data-action="navigate" data-target="planner" title="Go to Content Planning">
+        <div class="pipeline-step-node ${activeStage === 2 ? 'active-stage' : ''}" data-action="navigate" data-target="planner" title="Go to Content Planning">
           <div class="pipeline-node-icon" style="background: linear-gradient(135deg, #27C7C1, #18A8A2);">
             ${icon('grid')}
           </div>
           <div class="pipeline-node-text">
             <strong>2. Content Planning</strong>
-            <small>3 Slots</small>
+            <small>${formatNumber(totalSlots || state.plans.length)} Planned Slots</small>
+            <span class="pipeline-node-badge ${activeStage === 2 ? 'active' : 'idle'}">${activeStage === 2 ? 'Active Stage' : `${formatNumber(state.plans.length)} Plans`}</span>
           </div>
         </div>
 
         <!-- Stage 3 -->
-        <div class="pipeline-step-node" data-action="navigate" data-target="creative" title="Go to Engine15 Render">
+        <div class="pipeline-step-node ${activeStage === 3 ? 'active-stage' : ''}" data-action="navigate" data-target="creative" title="Go to Engine15 Render">
           <div class="pipeline-node-icon" style="background: linear-gradient(135deg, #F2BD59, #D99E28);">
             ${icon('sparkles')}
           </div>
           <div class="pipeline-node-text">
             <strong>3. Engine15 Render</strong>
-            <small>${inQueue} In-Flight</small>
+            <small>${formatNumber(inQueue)} In-Flight</small>
+            <span class="pipeline-node-badge ${activeStage === 3 ? 'active' : 'idle'}">${activeStage === 3 ? 'Active Stage' : (inQueue > 0 ? 'Rendering' : 'Ready')}</span>
           </div>
         </div>
 
         <!-- Stage 4 -->
-        <div class="pipeline-step-node" data-action="navigate" data-target="reviews" title="Go to Human Review">
+        <div class="pipeline-step-node ${activeStage === 4 ? 'active-stage' : ''}" data-action="navigate" data-target="reviews" title="Go to Human Review">
           <div class="pipeline-node-icon" style="background: linear-gradient(135deg, #A17CF5, #7D52DF);">
             ${icon('shield')}
           </div>
           <div class="pipeline-node-text">
             <strong>4. Human Review</strong>
-            <small>${drafts} Pending</small>
+            <small>${formatNumber(drafts)} Pending Gate</small>
+            <span class="pipeline-node-badge ${activeStage === 4 ? 'active' : 'idle'}">${activeStage === 4 ? 'Active Stage' : (drafts > 0 ? 'Requires Action' : 'Clear')}</span>
           </div>
         </div>
 
         <!-- Stage 5 -->
-        <div class="pipeline-step-node" data-action="navigate" data-target="calendar" title="Go to Meta Publish">
+        <div class="pipeline-step-node ${activeStage === 5 ? 'active-stage' : ''}" data-action="navigate" data-target="calendar" title="Go to Meta Publish">
           <div class="pipeline-node-icon" style="background: linear-gradient(135deg, #35D69A, #20AB74);">
             ${icon('send')}
           </div>
           <div class="pipeline-node-text">
             <strong>5. Meta Publish</strong>
-            <small>${scheduled} Queued</small>
+            <small>${formatNumber(scheduled)} Scheduled</small>
+            <span class="pipeline-node-badge ${activeStage === 5 ? 'active' : 'idle'}">${activeStage === 5 ? 'Active Stage' : `${formatNumber(state.jobs.filter(j => j.status === 'published').length)} Live`}</span>
           </div>
         </div>
       </div>
@@ -1377,41 +1768,37 @@ function renderOverview() {
           <button class="panel-link" data-action="navigate" data-target="creative">View All →</button>
         </div>
 
-        <div class="workbench-split-card">
-          <div class="workbench-thumb-box">
-            <svg viewBox="0 0 240 140" style="width:100%; height:100%;">
-              <defs>
-                <linearGradient id="wbBgGrad" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0%" stop-color="#C25A22" />
-                  <stop offset="50%" stop-color="#E87635" />
-                  <stop offset="100%" stop-color="#2D1C12" />
-                </linearGradient>
-              </defs>
-              <rect width="240" height="140" fill="url(#wbBgGrad)" />
-              <circle cx="170" cy="70" r="50" fill="#FFA56A" opacity="0.4" />
-              <!-- Person portrait silhouette / sunglasses graphic -->
-              <circle cx="165" cy="55" r="26" fill="#F4B892" />
-              <rect x="145" y="50" width="40" height="12" rx="4" fill="#1C1814" />
-              <path d="M 130 140 C 130 95, 200 95, 200 140 Z" fill="#E86E2A" />
-              <!-- Typography on Left -->
-              <text x="18" y="44" fill="#FFFFFF" font-size="20" font-weight="850" font-family="var(--font-sans)">Dream</text>
-              <text x="18" y="70" fill="#FFC89E" font-size="20" font-weight="850" font-family="var(--font-sans)">Bigger</text>
-              <text x="18" y="104" fill="#FFE2CE" font-size="10" font-weight="500" font-family="var(--font-sans)">Innovate. Create. Grow.</text>
-            </svg>
-          </div>
+        ${(featuredDraft || featuredJob) ? `
+          <div class="workbench-split-card" data-action="navigate" data-target="${featuredDraft ? 'reviews' : 'creative'}" style="cursor:pointer;">
+            <div class="workbench-thumb-box" style="position:relative; overflow:hidden; border-radius:8px; background:#121822; display:flex; align-items:center; justify-content:center; min-height:140px;">
+              ${featuredThumb ? `
+                <img src="${e(featuredThumb)}" alt="Asset preview" style="width:100%; height:100%; object-fit:cover;" />
+              ` : `
+                <div style="width:100%; height:100%; background:linear-gradient(135deg, #202834, #131822); display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--text-dim); gap:6px; padding:12px; text-align:center;">
+                  <span style="color:#FF873E; font-size:24px;">${icon('sparkles')}</span>
+                  <span style="font-size:12px; font-weight:600; color:var(--text-secondary);">${e(brandName(featuredBrand))}</span>
+                  <span style="font-size:10px; text-transform:uppercase; letter-spacing:0.06em;">${e(featuredPlatform)}</span>
+                </div>
+              `}
+            </div>
 
-          <div class="workbench-meta-info">
-            <span class="workbench-meta-brand">YUJ FOUNDATION</span>
-            <div class="workbench-meta-title">Dream Bigger — Campaign 2025</div>
-            <div class="workbench-meta-sub">Brand Awareness • Instagram</div>
-            <div class="workbench-meta-channels">
-              <span class="platform-pill-icon" title="Instagram">${icon('instagram')}</span>
-              <span class="platform-pill-icon" title="Facebook">${icon('facebook')}</span>
-              <span class="platform-pill-icon" title="LinkedIn">${icon('linkedin')}</span>
-              <span class="status-pill-ready">Ready</span>
+            <div class="workbench-meta-info">
+              <span class="workbench-meta-brand">${e(brandName(featuredBrand).toUpperCase())}</span>
+              <div class="workbench-meta-title">${e(featuredTitle)}</div>
+              <div class="workbench-meta-sub">${e(featuredSub)}</div>
+              <div class="workbench-meta-channels">
+                <span class="platform-pill-icon" title="${e(featuredPlatform)}">${icon(featuredPlatform === 'facebook' ? 'facebook' : featuredPlatform === 'linkedin' ? 'linkedin' : 'instagram')}</span>
+                <span class="status-pill-ready">${featuredDraft ? (featuredDraft.status === 'draft' ? 'Pending Approval' : 'Approved') : (featuredJob?.status || 'Active')}</span>
+              </div>
             </div>
           </div>
-        </div>
+        ` : `
+          <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:140px; text-align:center; padding:16px; color:var(--text-dim); gap:6px; background:rgba(255,255,255,0.02); border-radius:8px; border:1px dashed var(--border-subtle);">
+            <span style="color:#FF873E; font-size:22px;">${icon('sparkles')}</span>
+            <strong style="color:var(--text); font-size:13.5px;">No In-Flight Creative Jobs</strong>
+            <span style="font-size:12px;">Trigger an Engine15 composition from Content Planner to view drafts here.</span>
+          </div>
+        `}
       </div>
 
       <!-- Right: Needs Your Decision -->
@@ -1424,44 +1811,35 @@ function renderOverview() {
           <button class="panel-link" data-action="navigate" data-target="reviews">View All →</button>
         </div>
 
-        <div class="decisions-list">
-          <!-- Item 1: Fall Campaign -->
-          <div class="decision-card-row">
-            <div class="decision-thumb-preview" style="background: radial-gradient(circle, #7D52DF, #231247);">
-              <svg viewBox="0 0 44 44" style="width:28px; height:28px;">
-                <circle cx="22" cy="22" r="16" fill="none" stroke="#C5A4FF" stroke-width="2" />
-                <ellipse cx="22" cy="22" rx="20" ry="6" fill="none" stroke="#A17CF5" stroke-width="1.5" transform="rotate(-25 22 22)" />
-                <circle cx="22" cy="22" r="6" fill="#E2D4FF" />
-              </svg>
-            </div>
-            <div class="decision-info-col">
-              <div class="decision-info-title">YUJ Foundation — Fall Campaign</div>
-              <div class="decision-info-sub">Creative requires approval</div>
-            </div>
-            <div class="decision-time-meta">${icon('clock')} 2h ago</div>
-            <button class="btn btn-sm btn-primary" data-action="open-review" ${draftsList[0] ? `data-id="${e(draftsList[0].id)}"` : ''}>
-              Review
-            </button>
+        ${pendingDecisions.length > 0 ? `
+          <div class="decisions-list">
+            ${pendingDecisions.map(d => {
+              const camp = state.campaigns.find(c => c.id === d.campaign_id);
+              const title = camp ? camp.name : (d.brand ? brandName(d.brand) : 'Marketing Content Draft');
+              const sub = d.text ? trunc(d.text, 50) : (d.caption ? trunc(d.caption, 50) : 'Content awaiting human approval');
+              const time = timeAgo(d.created_at);
+              return `
+                <div class="decision-card-row">
+                  <div class="decision-thumb-preview" style="background:linear-gradient(135deg, rgba(255,135,62,0.12), rgba(39,199,193,0.12)); border:1px solid rgba(255,135,62,0.25); display:flex; align-items:center; justify-content:center; color:#FF873E;">
+                    ${icon(d.platform === 'facebook' ? 'facebook' : d.platform === 'linkedin' ? 'linkedin' : 'instagram')}
+                  </div>
+                  <div class="decision-info-col">
+                    <div class="decision-info-title">${e(title)}</div>
+                    <div class="decision-info-sub">${e(sub)}</div>
+                  </div>
+                  <div class="decision-time-meta">${icon('clock')} ${e(time)}</div>
+                  <button class="btn btn-sm btn-primary" data-action="open-review" data-id="${e(d.id)}">Review</button>
+                </div>
+              `;
+            }).join('')}
           </div>
-
-          <!-- Item 2: Sustainability Series -->
-          <div class="decision-card-row">
-            <div class="decision-thumb-preview" style="background: radial-gradient(circle, #1F8E64, #0A3222);">
-              <svg viewBox="0 0 44 44" style="width:28px; height:28px;">
-                <path d="M 12 32 C 12 18, 30 14, 32 12 C 32 26, 20 32, 12 32 Z" fill="#4ADE80" opacity="0.85" />
-                <path d="M 14 30 L 28 16" stroke="#052E16" stroke-width="1.8" stroke-linecap="round" />
-              </svg>
-            </div>
-            <div class="decision-info-col">
-              <div class="decision-info-title">Sustainability Series</div>
-              <div class="decision-info-sub">Copy needs review</div>
-            </div>
-            <div class="decision-time-meta">${icon('clock')} 3h ago</div>
-            <button class="btn btn-sm btn-primary" data-action="open-review" ${draftsList[1] ? `data-id="${e(draftsList[1].id)}"` : (draftsList[0] ? `data-id="${e(draftsList[0].id)}"` : '')}>
-              Review
-            </button>
+        ` : `
+          <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:140px; text-align:center; padding:16px; color:var(--text-dim); gap:6px; background:rgba(255,255,255,0.02); border-radius:8px; border:1px dashed var(--border-subtle);">
+            <span style="color:#35D69A; font-size:22px;">${icon('circleCheck')}</span>
+            <strong style="color:var(--text); font-size:13.5px;">Review Queue Clear</strong>
+            <span style="font-size:12px;">All content drafts have been reviewed and approved.</span>
           </div>
-        </div>
+        `}
       </div>
     </div>
   `;
@@ -2356,22 +2734,28 @@ function renderCalCell(cellDate, dayNum, isAdjacent, isToday, isSelected, cellJo
 // 14. SCREEN 7: PERFORMANCE INTELLIGENCE COMMAND CENTER (REFERENCE-ACCURATE)
 // --------------------------------------------------------------------------
 function renderAnalytics() {
-  const insight = state.insights || {};
-  const isDemoMode = isDemo();
+  const analytics = getAggregatedAnalytics();
+  const selectedCampaignObj = state.perfCampaign ? state.campaigns.find(c => c.id === state.perfCampaign) : null;
+  const campaignTitle = selectedCampaignObj
+    ? `${selectedCampaignObj.name.toUpperCase()} — CAMPAIGN PERFORMANCE`
+    : 'PORTFOLIO PERFORMANCE INTELLIGENCE';
+  const campaignSubtitle = selectedCampaignObj
+    ? `Objective: ${selectedCampaignObj.objective.toUpperCase()} • Created by: ${selectedCampaignObj.created_by} • Verified Meta Telemetry`
+    : `Aggregated Performance • Window: Last ${analytics.days} Days • Connected Meta Graph API / SQLite WAL`;
 
-  // Mini circular SVG gauge helper
-  const perfGauge = (pct, color) => {
+  const perfGauge = (pct, color, label) => {
+    const validPct = (typeof pct === 'number' && Number.isFinite(pct) && pct >= 0) ? Math.min(100, Math.round(pct)) : null;
     const r = 16;
     const circ = 2 * Math.PI * r;
-    const offset = circ - (pct / 100) * circ;
+    const offset = validPct !== null ? circ - (validPct / 100) * circ : circ;
     return `
       <div style="position:relative; width:38px; height:38px; display:grid; place-items:center; flex-shrink:0;">
         <svg viewBox="0 0 40 40" style="width:38px; height:38px; transform:rotate(-90deg);">
           <circle cx="20" cy="20" r="${r}" fill="none" stroke="#202834" stroke-width="3.5" />
-          <circle cx="20" cy="20" r="${r}" fill="none" stroke="${color}" stroke-width="3.5"
+          <circle cx="20" cy="20" r="${r}" fill="none" stroke="${validPct !== null ? color : '#364356'}" stroke-width="3.5"
             stroke-dasharray="${circ}" stroke-dashoffset="${offset}" stroke-linecap="round" />
         </svg>
-        <span style="position:absolute; font-size:9px; font-weight:800; color:#F3F5F7;">${Math.round(pct)}%</span>
+        <span style="position:absolute; font-size:9px; font-weight:800; color:#F3F5F7;">${validPct !== null ? validPct + '%' : (label || '—')}</span>
       </div>
     `;
   };
@@ -2382,12 +2766,17 @@ function renderAnalytics() {
     </div>
   `;
 
+  const bestPlatformObj = [...analytics.platformBreakdown].sort((a, b) => b.reach - a.reach)[0];
+  const bestPlatform = bestPlatformObj && bestPlatformObj.reach > 0
+    ? `${bestPlatformObj.platform.toUpperCase()} (${formatNumber(bestPlatformObj.reach)} reach)`
+    : 'None observed';
+
   return pageHead(
     'PERFORMANCE INTELLIGENCE',
-    'AURA SPARK™ LAUNCH — SOCIAL CAMPAIGN DASHBOARD',
-    'Global Marketing Recap • Campaign Window: Oct 1 – Oct 31, 2026 • Live Aggregated Metrics',
+    campaignTitle,
+    campaignSubtitle,
     `
-      <button class="btn btn-subtle" data-action="refresh">${icon('refresh')} Refresh</button>
+      <button class="btn btn-subtle" data-action="refresh-perf">${icon('refresh')} Sync Telemetry</button>
       <button class="perf-btn-export" data-action="export-report">${icon('upload')} Export Report</button>
     `
   ) + `
@@ -2395,123 +2784,129 @@ function renderAnalytics() {
       <!-- Top Header & Filter Controls Bar -->
       <div class="perf-top-bar">
         <div class="perf-top-title">
-          <h2>AURA SPARK™ LAUNCH — SOCIAL CAMPAIGN DASHBOARD</h2>
-          <p>Global Marketing Recap • Campaign Window: Oct 1 – Oct 31, 2026 • Live Aggregated Metrics</p>
+          <h2>${e(campaignTitle)}</h2>
+          <p>${e(campaignSubtitle)}</p>
         </div>
 
         <div class="perf-top-controls">
-          <button class="perf-select-btn" data-action="perf-date-picker">${icon('calendar')} Oct 1 – Oct 31, 2026 ▾</button>
-          <button class="perf-select-btn" data-action="perf-channel-filter">All Channels (5 Core) ▾</button>
-          <button class="perf-select-btn" data-action="perf-campaign-filter">AURA SPARK™ Launch ▾</button>
+          <button class="perf-select-btn" data-action="perf-date-picker">${icon('calendar')} Last ${analytics.days} Days ▾</button>
+          <button class="perf-select-btn" data-action="perf-channel-filter">${analytics.platformFilter === 'all' ? 'All Channels' : analytics.platformFilter.toUpperCase()} ▾</button>
+          <button class="perf-select-btn" data-action="perf-campaign-filter">${selectedCampaignObj ? e(selectedCampaignObj.name) : 'All Campaigns'} ▾</button>
           <button class="perf-btn-export" data-action="export-report">${icon('upload')} Export Report</button>
-          <button class="icon-btn" data-action="refresh" title="Refresh Telemetry" style="background:#1B2330; border:1px solid #293444; border-radius:6px; color:#F3F5F7;">
+          <button class="icon-btn" data-action="refresh-perf" title="Sync Telemetry" style="background:#1B2330; border:1px solid #293444; border-radius:6px; color:#F3F5F7;">
             ${icon('refresh')}
           </button>
         </div>
       </div>
 
-      <!-- Row of 7 KPI Cards (Reference Image 2 Accurate) -->
+      <!-- Row of 7 KPI Cards (Dynamically Connected to Actual Backend Telemetry) -->
       <div class="perf-kpi-strip">
         <!-- 1. Total Impressions -->
         <div class="perf-kpi-card">
           <div class="perf-kpi-card-header">Total Impressions</div>
           <div class="perf-kpi-card-main">
-            ${perfGauge(82.4, '#FF793D')}
+            ${perfGauge(analytics.totalViews != null ? 100 : null, '#FF793D')}
             <div>
-              <div class="perf-kpi-val">${isDemoMode ? '28.8M' : (insight.impressions ? formatNumber(insight.impressions) : '—')}</div>
-              <div class="perf-kpi-trend" style="color:#18C99A;">▲ 18.2% vs tgt</div>
+              <div class="perf-kpi-val">${analytics.totalViews != null ? formatNumber(analytics.totalViews) : '—'}</div>
+              <div class="perf-kpi-trend" style="color:${analytics.totalViews != null ? '#18C99A' : '#6C7A8D'};">
+                ${analytics.totalViews != null ? '● Observed via Meta' : 'Pending platform poll'}
+              </div>
             </div>
           </div>
-          <div class="perf-kpi-sub">Target: 35.0M | Paid+Org</div>
+          <div class="perf-kpi-sub">Total verified video & post impressions</div>
         </div>
 
         <!-- 2. Unique Reach -->
         <div class="perf-kpi-card">
           <div class="perf-kpi-card-header">Unique Reach</div>
           <div class="perf-kpi-card-main">
-            ${perfGauge(86.7, '#16B8E8')}
+            ${perfGauge(analytics.totalReach != null ? 100 : null, '#16B8E8')}
             <div>
-              <div class="perf-kpi-val">${isDemoMode ? '14.2M' : (insight.reach ? formatNumber(insight.reach) : '—')}</div>
-              <div class="perf-kpi-trend" style="color:#18C99A;">▲ 12.4% vs tgt</div>
+              <div class="perf-kpi-val">${analytics.totalReach != null ? formatNumber(analytics.totalReach) : '—'}</div>
+              <div class="perf-kpi-trend" style="color:${analytics.totalReach != null ? '#18C99A' : '#6C7A8D'};">
+                ${(analytics.totalReach && analytics.totalViews) ? 'Freq: ' + (analytics.totalViews / analytics.totalReach).toFixed(2) + 'x per user' : 'Distinct accounts'}
+              </div>
             </div>
           </div>
-          <div class="perf-kpi-sub">Freq: 2.03x per user</div>
+          <div class="perf-kpi-sub">Unique audience accounts reached</div>
         </div>
 
         <!-- 3. Engagement Rate -->
         <div class="perf-kpi-card">
           <div class="perf-kpi-card-header">Engagement Rate</div>
           <div class="perf-kpi-card-main">
-            ${perfGauge(68.5, '#18C99A')}
+            ${perfGauge(parseFloat(analytics.engagementRate) || null, '#18C99A')}
             <div>
-              <div class="perf-kpi-val">${isDemoMode ? '6.85%' : (insight.engagement_rate ? insight.engagement_rate + '%' : '—')}</div>
-              <div class="perf-kpi-trend" style="color:#18C99A;">▲ 1.45% vs bench</div>
+              <div class="perf-kpi-val">${analytics.engagementRate}</div>
+              <div class="perf-kpi-trend" style="color:${analytics.totalEngagements > 0 ? '#18C99A' : '#6C7A8D'};">
+                ${analytics.totalEngagements > 0 ? '▲ ' + formatNumber(analytics.totalEngagements) + ' actions' : 'No interactions recorded'}
+              </div>
             </div>
           </div>
-          <div class="perf-kpi-sub">Industry Avg: 5.40%</div>
+          <div class="perf-kpi-sub">Interactions / Views (Meta benchmark)</div>
         </div>
 
         <!-- 4. Positive Sentiment -->
         <div class="perf-kpi-card">
           <div class="perf-kpi-card-header">Positive Sentiment</div>
           <div class="perf-kpi-card-main">
-            ${perfGauge(95.1, '#18C99A')}
+            ${perfGauge(null, '#6C7A8D', 'N/A')}
             <div>
-              <div class="perf-kpi-val">${isDemoMode ? '95.1%' : (insight.sentiment ? insight.sentiment + '%' : '—')}</div>
-              <div class="perf-kpi-trend" style="color:#18C99A;">▲ 3.2% vs Q2</div>
+              <div class="perf-kpi-val" style="color:#818D9D;">N/A</div>
+              <div class="perf-kpi-trend" style="color:#6C7A8D;">API Not Configured</div>
             </div>
           </div>
-          <div class="perf-kpi-sub">24.1k mentions tracked</div>
+          <div class="perf-kpi-sub">NLP sentiment model not enabled</div>
         </div>
 
         <!-- 5. Total Conversions -->
         <div class="perf-kpi-card">
           <div class="perf-kpi-card-header">Total Conversions</div>
           <div class="perf-kpi-card-main">
-            ${perfIconBox('circleCheck', '#18C99A')}
+            ${perfIconBox('circleCheck', '#6C7A8D')}
             <div>
-              <div class="perf-kpi-val">${isDemoMode ? '42,850' : (insight.conversions ? formatNumber(insight.conversions) : '—')}</div>
-              <div class="perf-kpi-trend" style="color:#18C99A;">▲ 8.6% vs target</div>
+              <div class="perf-kpi-val" style="color:#818D9D;">N/A</div>
+              <div class="perf-kpi-trend" style="color:#6C7A8D;">Pixel Not Connected</div>
             </div>
           </div>
-          <div class="perf-kpi-sub">Direct Sample Requests</div>
+          <div class="perf-kpi-sub">Web conversion tracking not connected</div>
         </div>
 
         <!-- 6. Earned Media Value -->
         <div class="perf-kpi-card">
           <div class="perf-kpi-card-header">Earned Media Value</div>
           <div class="perf-kpi-card-main">
-            ${perfIconBox('dollar', '#F3F5F7')}
+            ${perfIconBox('dollar', '#6C7A8D')}
             <div>
-              <div class="perf-kpi-val">${isDemoMode ? '$684.2K' : (insight.emv ? '$' + formatNumber(insight.emv) : '—')}</div>
-              <div class="perf-kpi-trend" style="color:#18C99A;">▲ 24.1% vs budget</div>
+              <div class="perf-kpi-val" style="color:#818D9D;">N/A</div>
+              <div class="perf-kpi-trend" style="color:#6C7A8D;">Model Not Configured</div>
             </div>
           </div>
-          <div class="perf-kpi-sub">Est. PR Equivalent</div>
+          <div class="perf-kpi-sub">PR value multiplier not active</div>
         </div>
 
         <!-- 7. Blended ROAS -->
         <div class="perf-kpi-card">
           <div class="perf-kpi-card-header">Blended ROAS</div>
           <div class="perf-kpi-card-main">
-            ${perfIconBox('target', '#FF793D')}
+            ${perfIconBox('target', '#6C7A8D')}
             <div>
-              <div class="perf-kpi-val">${isDemoMode ? '4.71x' : (insight.roas ? insight.roas + 'x' : '—')}</div>
-              <div class="perf-kpi-trend" style="color:#18C99A;">▲ 0.51x vs goal</div>
+              <div class="perf-kpi-val" style="color:#818D9D;">N/A</div>
+              <div class="perf-kpi-trend" style="color:#6C7A8D;">Paid Ads Not Linked</div>
             </div>
           </div>
-          <div class="perf-kpi-sub">Ad Spend: $145.2K</div>
+          <div class="perf-kpi-sub">Paid spend tracking not connected</div>
         </div>
       </div>
 
-      <!-- ROW 1 — THREE ANALYTICS PANELS (Inspired by Reference Image 2) -->
+      <!-- ROW 1 — THREE ANALYTICS PANELS -->
       <div class="perf-analytics-grid-row">
-        <!-- Panel A: Daily Engagement Trend (OCT 2026) -->
+        <!-- Panel A: Daily Engagement Trend -->
         <div class="perf-box">
           <div class="perf-box-head">
             <div class="perf-box-title">
-              <h4>Daily Engagement Trend (Oct 2026)</h4>
-              <p>Total Engagement Actions: 1,942,800</p>
+              <h4>Daily Engagement Trend</h4>
+              <p>Total Engagement Actions: ${formatNumber(analytics.totalEngagements)}</p>
             </div>
             <div style="display:flex; align-items:center; gap:12px; font-size:11px; font-weight:700;">
               <span style="color:#FF793D;">● Engagements</span>
@@ -2519,222 +2914,109 @@ function renderAnalytics() {
             </div>
           </div>
 
-          <!-- Multi-Series Line Chart with Milestones -->
           <div class="perf-chart-svg-wrap">
-            <svg viewBox="0 0 540 160" preserveAspectRatio="none" style="width:100%; height:100%; overflow:visible;">
-              <defs>
-                <linearGradient id="trendGradOrange" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stop-color="#FF793D" stop-opacity="0.30" />
-                  <stop offset="100%" stop-color="#FF793D" stop-opacity="0.0" />
-                </linearGradient>
-                <linearGradient id="trendGradCyan" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stop-color="#16B8E8" stop-opacity="0.25" />
-                  <stop offset="100%" stop-color="#16B8E8" stop-opacity="0.0" />
-                </linearGradient>
-              </defs>
-
-              <!-- Grid Y Lines -->
-              <line x1="36" y1="20" x2="520" y2="20" stroke="#202834" stroke-dasharray="2,2" />
-              <text x="28" y="24" fill="#6C7A8D" font-size="10" text-anchor="end">100k</text>
-              <line x1="36" y1="50" x2="520" y2="50" stroke="#202834" stroke-dasharray="2,2" />
-              <text x="28" y="54" fill="#6C7A8D" font-size="10" text-anchor="end">60k</text>
-              <line x1="36" y1="80" x2="520" y2="80" stroke="#202834" stroke-dasharray="2,2" />
-              <text x="28" y="84" fill="#6C7A8D" font-size="10" text-anchor="end">40k</text>
-              <line x1="36" y1="110" x2="520" y2="110" stroke="#202834" stroke-dasharray="2,2" />
-              <text x="28" y="114" fill="#6C7A8D" font-size="10" text-anchor="end">20k</text>
-              <line x1="36" y1="135" x2="520" y2="135" stroke="#202834" />
-              <text x="28" y="138" fill="#6C7A8D" font-size="10" text-anchor="end">0</text>
-
-              <!-- X-Axis Labels -->
-              <text x="40" y="152" fill="#6C7A8D" font-size="10">Oct 1</text>
-              <text x="120" y="152" fill="#6C7A8D" font-size="10">Oct 6</text>
-              <text x="200" y="152" fill="#6C7A8D" font-size="10">Oct 11</text>
-              <text x="280" y="152" fill="#6C7A8D" font-size="10">Oct 16</text>
-              <text x="360" y="152" fill="#6C7A8D" font-size="10">Oct 21</text>
-              <text x="440" y="152" fill="#6C7A8D" font-size="10">Oct 26</text>
-              <text x="515" y="152" fill="#6C7A8D" font-size="10" text-anchor="end">Oct 31</text>
-
-              <!-- Area Fills -->
-              <path d="M 40 120 L 120 110 L 200 35 L 280 85 L 360 40 L 440 95 L 515 70 L 515 135 L 40 135 Z" fill="url(#trendGradOrange)" />
-              <path d="M 40 130 L 120 120 L 200 65 L 280 95 L 360 50 L 440 60 L 515 85 L 515 135 L 40 135 Z" fill="url(#trendGradCyan)" />
-
-              <!-- Lines -->
-              <path d="M 40 120 L 120 110 L 200 35 L 280 85 L 360 40 L 440 95 L 515 70" fill="none" stroke="#FF793D" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
-              <path d="M 40 130 L 120 120 L 200 65 L 280 95 L 360 50 L 440 60 L 515 85" fill="none" stroke="#16B8E8" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
-
-              <!-- Milestone Badges -->
-              <!-- 90k Launch at Oct 11 -->
-              <g transform="translate(168, 12)">
-                <rect width="64" height="18" rx="4" fill="#FF793D" />
-                <text x="32" y="12" fill="#0D1119" font-size="9.5" font-weight="850" text-anchor="middle">90k Launch</text>
-                <circle cx="32" cy="23" r="3" fill="#FF793D" />
-              </g>
-
-              <!-- 85k TikTok at Oct 21 -->
-              <g transform="translate(328, 16)">
-                <rect width="64" height="18" rx="4" fill="#16B8E8" />
-                <text x="32" y="12" fill="#0D1119" font-size="9.5" font-weight="850" text-anchor="middle">85k TikTok</text>
-                <circle cx="32" cy="24" r="3" fill="#16B8E8" />
-              </g>
-            </svg>
+            ${renderPerformanceTrendChart(analytics)}
           </div>
 
           <div class="perf-box-foot">
-            <b>Key Events:</b> Oct 11 Global Launch Event | Oct 21 #FizzVibe Challenge
+            <b>Telemetry Status:</b> Verified daily metrics from active publishing jobs.
           </div>
         </div>
 
-        <!-- Panel B: Platform Reach vs Target (%) -->
+        <!-- Panel B: Platform Reach Breakdown (%) -->
         <div class="perf-box">
           <div class="perf-box-head">
             <div class="perf-box-title">
-              <h4>Platform Reach vs Target (%)</h4>
-              <p>Target Threshold: 75% KPI Fulfillment</p>
+              <h4>Platform Reach Distribution (%)</h4>
+              <p>Breakdown across configured social accounts</p>
             </div>
             <div style="font-size:11px; font-weight:700; color:#929EAE;">
-              <span>■ Actual %</span>
+              <span>■ Actual Reach %</span>
             </div>
           </div>
 
-          <!-- Platform Bars List -->
           <div class="perf-bars-list">
-            <!-- TikTok -->
-            <div class="perf-bar-row">
-              <div class="perf-bar-row-top">
-                <span style="display:flex; align-items:center; gap:6px;">${icon('tiktok')} TikTok</span>
-                <span style="color:#FF793D; font-weight:750;">91.2% <small style="color:#6C7A8D; font-weight:500;">(11.8M Imp)</small></span>
+            ${analytics.platformBreakdown.length > 0 ? analytics.platformBreakdown.map(p => {
+              const platformColor = p.platform === 'instagram' ? '#16B8E8' : (p.platform === 'facebook' ? '#4B6BFB' : (p.platform === 'linkedin' ? '#27C7C1' : '#FF793D'));
+              return `
+                <div class="perf-bar-row">
+                  <div class="perf-bar-row-top">
+                    <span style="display:flex; align-items:center; gap:6px; text-transform:capitalize;">${icon(p.platform === 'instagram' ? 'instagram' : (p.platform === 'facebook' ? 'facebook' : 'globe'))} ${e(p.platform)}</span>
+                    <span style="color:${platformColor}; font-weight:750;">${p.percentage}% <small style="color:#6C7A8D; font-weight:500;">(${formatNumber(p.reach)} Reach • ${p.posts} Posts)</small></span>
+                  </div>
+                  <div class="perf-bar-track">
+                    <div class="perf-bar-fill" style="width:${Math.max(4, parseFloat(p.percentage) || 0)}%; background:${platformColor};"></div>
+                  </div>
+                </div>
+              `;
+            }).join('') : `
+              <div style="padding:24px; text-align:center; color:#6C7A8D; font-size:13px;">
+                No platform reach observations recorded yet.
               </div>
-              <div class="perf-bar-track">
-                <div class="perf-bar-fill" style="width:91.2%; background:#FF793D;"></div>
-              </div>
-            </div>
-
-            <!-- Instagram -->
-            <div class="perf-bar-row">
-              <div class="perf-bar-row-top">
-                <span style="display:flex; align-items:center; gap:6px;">${icon('instagram')} Instagram</span>
-                <span style="color:#16B8E8; font-weight:750;">84.6% <small style="color:#6C7A8D; font-weight:500;">(8.4M Imp)</small></span>
-              </div>
-              <div class="perf-bar-track">
-                <div class="perf-bar-fill" style="width:84.6%; background:#16B8E8;"></div>
-              </div>
-            </div>
-
-            <!-- YouTube -->
-            <div class="perf-bar-row">
-              <div class="perf-bar-row-top">
-                <span style="display:flex; align-items:center; gap:6px;">${icon('youtube')} YouTube</span>
-                <span style="color:#18C99A; font-weight:750;">78.4% <small style="color:#6C7A8D; font-weight:500;">(4.2M Imp)</small></span>
-              </div>
-              <div class="perf-bar-track">
-                <div class="perf-bar-fill" style="width:78.4%; background:#18C99A;"></div>
-              </div>
-            </div>
-
-            <!-- X / Twitter -->
-            <div class="perf-bar-row">
-              <div class="perf-bar-row-top">
-                <span style="display:flex; align-items:center; gap:6px;">${icon('twitter')} X / Twitter</span>
-                <span style="color:#9675F5; font-weight:750;">62.1% <small style="color:#6C7A8D; font-weight:500;">(2.1M Imp)</small></span>
-              </div>
-              <div class="perf-bar-track">
-                <div class="perf-bar-fill" style="width:62.1%; background:#9675F5;"></div>
-              </div>
-            </div>
-
-            <!-- Facebook -->
-            <div class="perf-bar-row">
-              <div class="perf-bar-row-top">
-                <span style="display:flex; align-items:center; gap:6px;">${icon('facebook')} Facebook</span>
-                <span style="color:#4B6BFB; font-weight:750;">54.3% <small style="color:#6C7A8D; font-weight:500;">(1.5M Imp)</small></span>
-              </div>
-              <div class="perf-bar-track">
-                <div class="perf-bar-fill" style="width:54.3%; background:#4B6BFB;"></div>
-              </div>
-            </div>
+            `}
           </div>
 
           <div class="perf-box-foot">
-            Target Benchmark line set at 75.0% for primary campaign channels
+            Platform shares reflect observed Meta Graph API post reach.
           </div>
         </div>
 
-        <!-- Panel C: Share of Voice (SOV %) & Sentiment -->
+        <!-- Panel C: Brand Distribution & Sentiment Status -->
         <div class="perf-box">
           <div class="perf-box-head">
             <div class="perf-box-title">
-              <h4>Share of Voice (SOV %)</h4>
-              <p>Beverage Category Mentions (Oct 2026)</p>
+              <h4>Portfolio Content Share</h4>
+              <p>Distribution Across Connected Brands</p>
             </div>
           </div>
 
           <!-- Segmented Horizontal Bar -->
           <div class="perf-sov-segments">
-            <div style="width:34.2%; background:#FF793D;" title="AURA SPARK: 34.2%"></div>
-            <div style="width:24.5%; background:#9675F5;" title="Volt Energy Boost: 24.5%"></div>
-            <div style="width:18.1%; background:#C5E85A;" title="Zest Pop Soda: 18.1%"></div>
-            <div style="width:14.3%; background:#16B8E8;" title="Hydro Fizz Water: 14.3%"></div>
-            <div style="width:8.9%; background:#4B5565;" title="Other Brands: 8.9%"></div>
+            ${analytics.brandBreakdown.map((b, i) => {
+              const colors = ['#FF793D', '#16B8E8', '#18C99A', '#9675F5', '#F2BD59'];
+              return `<div style="width:${Math.max(4, parseFloat(b.percentage))}%; background:${colors[i % colors.length]};" title="${e(brandName(b.brand))}: ${b.percentage}%"></div>`;
+            }).join('')}
           </div>
 
-          <!-- Brand Breakdown List -->
           <div class="perf-sov-legend-list">
-            <div class="perf-sov-legend-row">
-              <span><span style="color:#FF793D;">●</span> <b>AURA Spark</b> (Our Brand)</span>
-              <div>
-                <b style="color:#F3F5F7;">34.2%</b>
-                <span class="perf-sov-rank-badge">#1 Rank</span>
-              </div>
-            </div>
-            <div class="perf-sov-legend-row">
-              <span><span style="color:#9675F5;">●</span> Volt Energy Boost</span>
-              <div><b style="color:#929EAE;">24.5%</b> <small style="color:#6C7A8D;">Competitor A</small></div>
-            </div>
-            <div class="perf-sov-legend-row">
-              <span><span style="color:#C5E85A;">●</span> Zest Pop Soda</span>
-              <div><b style="color:#929EAE;">18.1%</b> <small style="color:#6C7A8D;">Competitor B</small></div>
-            </div>
-            <div class="perf-sov-legend-row">
-              <span><span style="color:#16B8E8;">●</span> Hydro Fizz Water</span>
-              <div><b style="color:#929EAE;">14.3%</b> <small style="color:#6C7A8D;">Competitor C</small></div>
-            </div>
-            <div class="perf-sov-legend-row">
-              <span><span style="color:#4B5565;">●</span> Other Brands Combined</span>
-              <div><b style="color:#929EAE;">8.9%</b> <small style="color:#6C7A8D;">12 brands</small></div>
-            </div>
+            ${analytics.brandBreakdown.map((b, i) => {
+              const colors = ['#FF793D', '#16B8E8', '#18C99A', '#9675F5', '#F2BD59'];
+              return `
+                <div class="perf-sov-legend-row">
+                  <span><span style="color:${colors[i % colors.length]};">●</span> <b>${e(brandName(b.brand))}</b></span>
+                  <div>
+                    <b style="color:#F3F5F7;">${b.percentage}%</b>
+                    <span class="perf-sov-rank-badge">#${i + 1} Rank</span>
+                  </div>
+                </div>
+              `;
+            }).join('')}
           </div>
 
-          <!-- Section 2: Audience Sentiment Breakdown -->
+          <!-- Audience Sentiment Status -->
           <div style="margin-top:14px; padding-top:10px; border-top:1px solid #202834;">
             <div style="font-size:12px; font-weight:750; color:#F3F5F7; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:4px;">
-              Audience Sentiment Breakdown
+              Audience Sentiment Status
             </div>
-            <div class="perf-sentiment-bar">
-              <div style="width:68.5%; background:#18C99A;" title="Positive: 68.5%"></div>
-              <div style="width:6.2%; background:#F4B942;" title="Neutral: 6.2%"></div>
-              <div style="width:3.3%; background:#F15B66;" title="Negative: 3.3%"></div>
-            </div>
-            <div style="display:flex; justify-content:space-between; font-size:11px; color:#929EAE;">
-              <span><span style="color:#18C99A;">●</span> Pos: <b>68.5%</b></span>
-              <span><span style="color:#F4B942;">●</span> Neu: <b>6.2%</b></span>
-              <span><span style="color:#F15B66;">●</span> Neg: <b>3.3%</b></span>
+            <div style="font-size:12px; color:#818D9D; padding:6px 0;">
+              External sentiment listening API is not configured in backend. Ready for integration.
             </div>
           </div>
 
           <div class="perf-box-foot">
-            Sentiment score calculated via AI Natural Language Analysis
+            Calculated from internal portfolio publishing records.
           </div>
         </div>
       </div>
 
-      <!-- ROW 2 — THREE INFORMATION PANELS (Inspired by Reference Image 2) -->
+      <!-- ROW 2 — THREE INFORMATION PANELS -->
       <div class="perf-analytics-grid-row">
         <!-- Panel A: Top Performing Campaign Posts Table -->
         <div class="perf-box">
           <div class="perf-box-head">
             <div class="perf-box-title">
               <h4>Top Performing Campaign Posts</h4>
-              <p>Ranked by Engagement Volume & ROAS (Oct 2026)</p>
+              <p>Ranked by Engagement & Verified Views</p>
             </div>
           </div>
 
@@ -2743,128 +3025,70 @@ function renderAnalytics() {
               <tr>
                 <th>Post ID</th>
                 <th>Platform</th>
-                <th>Format</th>
+                <th>Title / Topic</th>
                 <th>Views</th>
-                <th>Eng. Rate</th>
-                <th>ROAS</th>
+                <th>Engagements</th>
+                <th>Status</th>
               </tr>
             </thead>
             <tbody>
-              <tr>
-                <td style="color:#FF793D; font-weight:750;">#AURA-01</td>
-                <td><span style="display:inline-flex; align-items:center; gap:4px;">${icon('tiktok')} TikTok</span></td>
-                <td>Challenge</td>
-                <td style="font-weight:750;">2.41M</td>
-                <td style="color:#18C99A; font-weight:750;">8.92%</td>
-                <td style="font-weight:750;">5.24x</td>
-              </tr>
-              <tr>
-                <td style="color:#FF793D; font-weight:750;">#AURA-04</td>
-                <td><span style="display:inline-flex; align-items:center; gap:4px;">${icon('instagram')} Instagram</span></td>
-                <td>Reel / Ad</td>
-                <td style="font-weight:750;">1.85M</td>
-                <td style="color:#18C99A; font-weight:750;">7.41%</td>
-                <td style="font-weight:750;">4.81x</td>
-              </tr>
-              <tr>
-                <td style="color:#FF793D; font-weight:750;">#AURA-12</td>
-                <td><span style="display:inline-flex; align-items:center; gap:4px;">${icon('youtube')} YouTube</span></td>
-                <td>Shorts</td>
-                <td style="font-weight:750;">1.12M</td>
-                <td style="color:#18C99A; font-weight:750;">6.20%</td>
-                <td style="font-weight:750;">4.15x</td>
-              </tr>
-              <tr>
-                <td style="color:#FF793D; font-weight:750;">#AURA-09</td>
-                <td><span style="display:inline-flex; align-items:center; gap:4px;">${icon('tiktok')} TikTok</span></td>
-                <td>Creator Co</td>
-                <td style="font-weight:750;">980K</td>
-                <td style="color:#18C99A; font-weight:750;">9.14%</td>
-                <td style="font-weight:750;">5.60x</td>
-              </tr>
-              <tr>
-                <td style="color:#FF793D; font-weight:750;">#AURA-22</td>
-                <td><span style="display:inline-flex; align-items:center; gap:4px;">${icon('instagram')} Instagram</span></td>
-                <td>Carousel</td>
-                <td style="font-weight:750;">650K</td>
-                <td style="color:#18C99A; font-weight:750;">5.12%</td>
-                <td style="font-weight:750;">3.40x</td>
-              </tr>
+              ${analytics.posts.length > 0 ? analytics.posts.slice(0, 5).map(p => {
+                const engTotal = (Number(p.likes) || 0) + (Number(p.comments) || 0) + (Number(p.saved) || 0) + (Number(p.shares) || 0);
+                return `
+                  <tr>
+                    <td style="color:#FF793D; font-weight:750;">#${e(String(p.id || '').slice(-6).toUpperCase())}</td>
+                    <td><span style="display:inline-flex; align-items:center; gap:4px; text-transform:capitalize;">${icon(p.platform === 'instagram' ? 'instagram' : (p.platform === 'facebook' ? 'facebook' : 'globe'))} ${e(p.platform)}</span></td>
+                    <td style="max-width:200px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${e(p.title || p.topic || '')}">${e(p.title || p.topic || 'Published Post')}</td>
+                    <td style="font-weight:750;">${p.views != null ? formatNumber(p.views) : '—'}</td>
+                    <td style="color:#18C99A; font-weight:750;">${formatNumber(engTotal)}</td>
+                    <td><span class="tag good">Observed</span></td>
+                  </tr>
+                `;
+              }).join('') : `
+                <tr>
+                  <td colspan="6" style="text-align:center; padding:24px; color:#818D9D;">No published posts with performance observations found for current filters.</td>
+                </tr>
+              `}
             </tbody>
           </table>
 
           <div class="perf-box-foot">
-            Showing Top 5 of 142 total campaign posts published in Oct 2026
+            Showing ${Math.min(5, analytics.posts.length)} of ${analytics.posts.length} published posts with insights
           </div>
         </div>
 
-        <!-- Panel B: Audience Demographics -->
+        <!-- Panel B: Audience Demographics & Hashtags -->
         <div class="perf-box">
           <div class="perf-box-head">
             <div class="perf-box-title">
-              <h4>Audience Demographics</h4>
-              <p>Age Distribution & Viral Hashtags</p>
+              <h4>Audience & Hashtag Telemetry</h4>
+              <p>Published Content Distribution</p>
             </div>
           </div>
 
-          <!-- Horizontal Comparison Bars -->
-          <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:14px;">
-            <div style="display:flex; align-items:center; gap:10px; font-size:12px;">
-              <span style="width:68px; color:#929EAE;">18–24 Yrs</span>
-              <div style="flex:1; height:8px; background:#1B2330; border-radius:4px; overflow:hidden;">
-                <div style="width:42%; height:100%; background:#FF793D;"></div>
-              </div>
-              <span style="width:36px; text-align:right; font-weight:750; color:#F3F5F7;">42%</span>
-            </div>
-
-            <div style="display:flex; align-items:center; gap:10px; font-size:12px;">
-              <span style="width:68px; color:#929EAE;">25–34 Yrs</span>
-              <div style="flex:1; height:8px; background:#1B2330; border-radius:4px; overflow:hidden;">
-                <div style="width:38%; height:100%; background:#16B8E8;"></div>
-              </div>
-              <span style="width:36px; text-align:right; font-weight:750; color:#F3F5F7;">38%</span>
-            </div>
-
-            <div style="display:flex; align-items:center; gap:10px; font-size:12px;">
-              <span style="width:68px; color:#929EAE;">35–44 Yrs</span>
-              <div style="flex:1; height:8px; background:#1B2330; border-radius:4px; overflow:hidden;">
-                <div style="width:12%; height:100%; background:#18C99A;"></div>
-              </div>
-              <span style="width:36px; text-align:right; font-weight:750; color:#F3F5F7;">12%</span>
-            </div>
-
-            <div style="display:flex; align-items:center; gap:10px; font-size:12px;">
-              <span style="width:68px; color:#929EAE;">45+ Yrs</span>
-              <div style="flex:1; height:8px; background:#1B2330; border-radius:4px; overflow:hidden;">
-                <div style="width:8%; height:100%; background:#4B5565;"></div>
-              </div>
-              <span style="width:36px; text-align:right; font-weight:750; color:#F3F5F7;">8%</span>
-            </div>
+          <div style="font-size:12px; color:#818D9D; margin-bottom:12px; padding:8px; background:rgba(255,255,255,0.02); border-radius:6px;">
+            Audience age and gender telemetry requires Meta Insights demographics API authorization.
           </div>
 
           <!-- Top Campaign Hashtags -->
           <div style="border-top:1px solid #202834; padding-top:10px;">
             <div style="font-size:12px; font-weight:750; color:#F3F5F7; text-transform:uppercase; letter-spacing:0.04em; margin-bottom:8px;">
-              Top Campaign Hashtags
+              Active Campaign Hashtags
             </div>
             <div style="display:flex; flex-direction:column; gap:6px; font-size:12px;">
-              <div style="display:flex; justify-content:space-between; align-items:center;">
-                <span style="color:#16B8E8; font-weight:750;">#FizzVibe</span>
-                <span style="color:#929EAE;">142K UGC posts <b style="color:#18C99A; margin-left:6px;">4.6M reach</b></span>
-              </div>
-              <div style="display:flex; justify-content:space-between; align-items:center;">
-                <span style="color:#16B8E8; font-weight:750;">#AuraSparkLaunch</span>
-                <span style="color:#929EAE;">89K UGC posts <b style="color:#18C99A; margin-left:6px;">3.1M reach</b></span>
-              </div>
-              <div style="display:flex; justify-content:space-between; align-items:center;">
-                <span style="color:#16B8E8; font-weight:750;">#TasteTheSpark</span>
-                <span style="color:#929EAE;">45K UGC posts <b style="color:#18C99A; margin-left:6px;">1.6M reach</b></span>
-              </div>
+              ${analytics.topHashtags.length > 0 ? analytics.topHashtags.map(h => `
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <span style="color:#16B8E8; font-weight:750;">${e(h.tag)}</span>
+                  <span style="color:#929EAE;">${h.count} post${h.count === 1 ? '' : 's'} included</span>
+                </div>
+              `).join('') : `
+                <span style="color:#6C7A8D;">No hashtags detected in current published copy.</span>
+              `}
             </div>
           </div>
 
           <div class="perf-box-foot">
-            Audience skew: 64% Female / 36% Male | Top Region: US & CA
+            Extracted from active published content records.
           </div>
         </div>
 
@@ -2872,73 +3096,58 @@ function renderAnalytics() {
         <div class="perf-box">
           <div class="perf-box-head">
             <div class="perf-box-title">
-              <h4>Real-Time Alerts & Spikes</h4>
-              <p>Automated Event Detection • Oct 2026</p>
+              <h4>Real-Time Alerts & Health</h4>
+              <p>Operational Anomaly Detection</p>
             </div>
-            <button class="panel-link" data-action="navigate" data-target="operations">View All (8) ↗</button>
+            <button class="panel-link" data-action="navigate" data-target="operations">View Health ↗</button>
           </div>
 
-          <!-- 4 Alert Cards -->
-          <div class="perf-alert-card danger">
-            <div class="perf-alert-title" style="color:#F15B66;">
-              <span>${icon('alert')} VIRAL TRAFFIC SPIKE DETECTED</span>
-            </div>
-            <div class="perf-alert-desc">#FizzVibe reached #2 Trending on TikTok US (+310% traffic) • Oct 28, 2026 • 14:32 PST</div>
-          </div>
-
-          <div class="perf-alert-card warning">
-            <div class="perf-alert-title" style="color:#F4B942;">
-              <span>${icon('alert')} BUDGET THRESHOLD WARNING</span>
-            </div>
-            <div class="perf-alert-desc">Instagram Reels Ad Set reached 92% of allocated daily budget • Oct 29, 2026 • 09:15 PST</div>
-          </div>
-
-          <div class="perf-alert-card info">
-            <div class="perf-alert-title" style="color:#16B8E8;">
-              <span>${icon('sparkles')} INFLUENCER MILESTONE HIT</span>
-            </div>
-            <div class="perf-alert-desc">@alex_vibe sponsored reel crossed 1.0M organic views • Oct 30, 2026 • 18:40 PST</div>
-          </div>
-
-          <div class="perf-alert-card success">
-            <div class="perf-alert-title" style="color:#18C99A;">
-              <span>${icon('circleCheck')} CONVERSION TARGET EXCEEDED</span>
-            </div>
-            <div class="perf-alert-desc">Campaign sample request goal reached 100% of target • Oct 31, 2026 • 11:05 PST</div>
+          <div style="display:flex; flex-direction:column; gap:8px;">
+            ${(state.ops.alerts && state.ops.alerts.length > 0) ? state.ops.alerts.map(a => `
+              <div class="perf-alert-card warning">
+                <div class="perf-alert-title" style="color:#F4B942;">
+                  <span>${icon('alert')} ${e(String(a.kind || 'OPERATIONAL ALERT').toUpperCase().replaceAll('_', ' '))}</span>
+                </div>
+                <div class="perf-alert-desc">Brand: ${e(brandName(a.brand || 'all'))} • Count: ${e(a.count || 1)} requiring operator attention.</div>
+              </div>
+            `).join('') : `
+              <div class="perf-alert-card success">
+                <div class="perf-alert-title" style="color:#18C99A;">
+                  <span>${icon('circleCheck')} ALL PIPELINES OPERATIONAL</span>
+                </div>
+                <div class="perf-alert-desc">Zero publishing failures or event delivery anomalies recorded.</div>
+              </div>
+            `}
           </div>
 
           <div class="perf-box-foot">
-            Auto-refresh active • Webhook Integration online
+            Telemetry auto-synced with Social Studio operational state.
           </div>
         </div>
       </div>
 
-      <!-- Bottom Intelligence Strip (Reference Image 2 Accurate) -->
+      <!-- Bottom Intelligence Strip -->
       <div class="perf-bottom-strip">
         <div class="perf-bottom-strip-left">
           ${icon('circleCheck')}
-          <span>OCTOBER 2026 CAMPAIGN RECAP COMPLETE</span>
+          <span>PERFORMANCE TELEMETRY SYNCHRONIZED</span>
         </div>
 
         <div class="perf-bottom-strip-metrics">
-          <span>Total Conversions: <strong>42,850</strong></span>
-          <span>Total Spend: <strong>$145,200</strong></span>
-          <span>Avg CPM: <strong>$5.04</strong></span>
-          <span>Avg CPE: <strong>$0.075</strong></span>
-          <span>Best Channel: <strong style="color:#FF793D;">TikTok (5.24x ROAS)</strong></span>
+          <span>Observed Posts: <strong>${analytics.posts.length}</strong></span>
+          <span>Verified Reach: <strong>${analytics.totalReach != null ? formatNumber(analytics.totalReach) : '—'}</strong></span>
+          <span>Total Interactions: <strong>${formatNumber(analytics.totalEngagements)}</strong></span>
+          <span>Best Channel: <strong style="color:#FF793D;">${e(bestPlatform)}</strong></span>
         </div>
 
         <div class="perf-bottom-kpi-pill">
-          <span>● STATUS: PASSED KPI</span>
+          <span>● STATUS: CONNECTED</span>
         </div>
       </div>
     </div>
   `;
 }
 
-// --------------------------------------------------------------------------
-// 15. SCREEN 8: PIPELINE HEALTH (OPERATIONS & MONITORING)
-// --------------------------------------------------------------------------
 function renderOperations() {
   const alerts = state.ops.alerts || [];
   const prod = state.ops.production || {};
@@ -3769,6 +3978,152 @@ async function handleAction(btn) {
 
   try {
     if (act === 'close-modal') return closeModal();
+    if (act === 'pulse-filter') {
+      openModal('Filter Operations Pulse Date Range', `
+        <div class="form-stack">
+          <button type="button" class="btn btn-block ${(state.pulsePeriod || '30') === '7' ? 'btn-primary' : 'btn-subtle'}" data-action="set-pulse-period" data-period="7">Last 7 Days</button>
+          <button type="button" class="btn btn-block ${(state.pulsePeriod || '30') === '30' ? 'btn-primary' : 'btn-subtle'}" data-action="set-pulse-period" data-period="30">Last 30 Days</button>
+          <button type="button" class="btn btn-block ${(state.pulsePeriod || '30') === '90' ? 'btn-primary' : 'btn-subtle'}" data-action="set-pulse-period" data-period="90">Last 90 Days</button>
+        </div>
+      `);
+      return;
+    }
+    if (act === 'set-pulse-period') {
+      state.pulsePeriod = btn.dataset?.period || '30';
+      state.analyticsPeriodDays = Number(state.pulsePeriod);
+      closeModal();
+      if (!isDemo()) {
+        state.pulseLoading = true;
+        render();
+        service(`/v1/analytics/overview?days=${state.pulsePeriod}`)
+          .then(data => {
+            state.insights = data;
+            state.pulseError = null;
+          })
+          .catch(err => {
+            state.pulseError = err.message;
+          })
+          .finally(() => {
+            state.pulseLoading = false;
+            render();
+          });
+      } else {
+        render();
+      }
+      return;
+    }
+    if (act === 'pulse-hover-point') {
+      state.pulseHoverIndex = Number(btn.dataset?.index ?? 0);
+      render();
+      return;
+    }
+    if (act === 'perf-date-picker') {
+      openModal('Filter Performance Window', `
+        <div class="form-stack">
+          <button type="button" class="btn btn-block ${(state.perfPeriod || '30') === '7' ? 'btn-primary' : 'btn-subtle'}" data-action="set-perf-period" data-period="7">Last 7 Days</button>
+          <button type="button" class="btn btn-block ${(state.perfPeriod || '30') === '30' ? 'btn-primary' : 'btn-subtle'}" data-action="set-perf-period" data-period="30">Last 30 Days</button>
+          <button type="button" class="btn btn-block ${(state.perfPeriod || '30') === '90' ? 'btn-primary' : 'btn-subtle'}" data-action="set-perf-period" data-period="90">Last 90 Days</button>
+        </div>
+      `);
+      return;
+    }
+    if (act === 'set-perf-period') {
+      state.perfPeriod = btn.dataset?.period || '30';
+      state.analyticsPeriodDays = Number(state.perfPeriod);
+      closeModal();
+      if (!isDemo()) {
+        state.perfLoading = true;
+        render();
+        const params = new URLSearchParams();
+        params.set('days', state.perfPeriod);
+        if (state.perfCampaign) params.set('campaign_id', state.perfCampaign);
+        service(`/v1/analytics/overview?${params.toString()}`)
+          .then(data => {
+            state.insights = data;
+            state.perfError = null;
+          })
+          .catch(err => {
+            state.perfError = err.message;
+          })
+          .finally(() => {
+            state.perfLoading = false;
+            render();
+          });
+      } else {
+        render();
+      }
+      return;
+    }
+    if (act === 'perf-channel-filter') {
+      const platforms = ['all', 'instagram', 'facebook', 'linkedin', 'tiktok', 'youtube'];
+      openModal('Filter by Channel', `
+        <div class="form-stack">
+          ${platforms.map(p => `
+            <button type="button" class="btn btn-block ${(state.perfPlatform || 'all') === p ? 'btn-primary' : 'btn-subtle'}" data-action="set-perf-platform" data-platform="${p}">
+              ${p === 'all' ? 'All Channels (Multi-Platform)' : p.charAt(0).toUpperCase() + p.slice(1)}
+            </button>
+          `).join('')}
+        </div>
+      `);
+      return;
+    }
+    if (act === 'set-perf-platform') {
+      state.perfPlatform = btn.dataset?.platform || 'all';
+      closeModal();
+      render();
+      return;
+    }
+    if (act === 'perf-campaign-filter') {
+      openModal('Filter by Campaign', `
+        <div class="form-stack">
+          <button type="button" class="btn btn-block ${!state.perfCampaign ? 'btn-primary' : 'btn-subtle'}" data-action="set-perf-campaign" data-id="">
+            All Campaigns (Aggregated View)
+          </button>
+          ${state.campaigns.map(c => `
+            <button type="button" class="btn btn-block ${state.perfCampaign === c.id ? 'btn-primary' : 'btn-subtle'}" data-action="set-perf-campaign" data-id="${e(c.id)}">
+              ${e(c.name)} (${e(c.status)})
+            </button>
+          `).join('')}
+        </div>
+      `);
+      return;
+    }
+    if (act === 'set-perf-campaign') {
+      state.perfCampaign = btn.dataset?.id || '';
+      closeModal();
+      if (!isDemo()) {
+        state.perfLoading = true;
+        render();
+        const params = new URLSearchParams();
+        params.set('days', state.perfPeriod || '30');
+        if (state.perfCampaign) params.set('campaign_id', state.perfCampaign);
+        service(`/v1/analytics/overview?${params.toString()}`)
+          .then(data => {
+            state.insights = data;
+            state.perfError = null;
+          })
+          .catch(err => {
+            state.perfError = err.message;
+          })
+          .finally(() => {
+            state.perfLoading = false;
+            render();
+          });
+      } else {
+        render();
+      }
+      return;
+    }
+    if (act === 'perf-hover-point') {
+      state.perfHoverIndex = Number(btn.dataset?.index ?? 0);
+      render();
+      return;
+    }
+    if (act === 'refresh-perf') {
+      await refreshAll();
+      toast('Performance metrics synchronized');
+      return;
+    }
     if (act === 'close-palette') return closeCommandPalette();
     if (act === 'toggle-theme') return toggleTheme();
     if (act === 'toggle-campaign-view') {
@@ -4421,6 +4776,45 @@ if (typeof document !== 'undefined') {
 
   // 3D KPI Card Hover Tilt Microinteraction (Max 3.5 deg, disabled on touch/reduced-motion)
   document.addEventListener('mousemove', ev => {
+    // Interactive point hover tracking
+    const pulsePoint = ev.target.closest('[data-action="pulse-hover-point"]');
+    if (pulsePoint) {
+      const date = pulsePoint.dataset.date;
+      const reach = pulsePoint.dataset.reach;
+      const views = pulsePoint.dataset.views;
+      const x = parseFloat(pulsePoint.dataset.x);
+      const y = parseFloat(pulsePoint.dataset.y);
+      const tooltip = $('pulseTooltipBox');
+      if (tooltip) {
+        tooltip.style.left = `${Math.max(12, Math.min(88, (x / 1000) * 100))}%`;
+        tooltip.style.top = `${Math.max(12, y - 48)}px`;
+        const dtEl = $('pulseTooltipDate');
+        if (dtEl) dtEl.textContent = date;
+        const rEl = $('pulseTooltipReach');
+        if (rEl) rEl.textContent = formatNumber(Number(reach));
+        const vEl = $('pulseTooltipViews');
+        if (vEl) vEl.textContent = formatNumber(Number(views));
+      }
+    }
+
+    const perfPoint = ev.target.closest('[data-action="perf-hover-point"]');
+    if (perfPoint) {
+      const date = perfPoint.dataset.date;
+      const eng = perfPoint.dataset.eng;
+      const views = perfPoint.dataset.views;
+      const x = parseFloat(perfPoint.dataset.x);
+      const y = parseFloat(perfPoint.dataset.y);
+      const tooltip = $('perfTrendTooltip');
+      if (tooltip) {
+        tooltip.style.left = `${Math.max(14, Math.min(86, (x / 540) * 100))}%`;
+        tooltip.style.top = `${Math.max(6, y - 38)}px`;
+        tooltip.innerHTML = `
+          <div style="color:#6C7A8D; font-weight:700; margin-bottom:2px;">${e(date)}</div>
+          <div style="color:#FF793D; font-weight:700;">● Eng: ${formatNumber(Number(eng))}</div>
+          <div style="color:#16B8E8; font-weight:700;">● Views: ${formatNumber(Number(views))}</div>
+        `;
+      }
+    }
     const card = ev.target.closest?.('.kpi-3d-card');
     if (!card) {
       document.querySelectorAll?.('.kpi-3d-card')?.forEach?.(c => {
@@ -4501,38 +4895,41 @@ if (typeof globalThis !== 'undefined') {
     loadDemo
   };
 }
+
 // Expose Engine 15 asset uploader globally for engine15.html integration
-window.uploadEngine15Asset = async function(blobOrBase64, metadata = {}) {
-  try {
-    let fileBlob;
-    if (typeof blobOrBase64 === 'string' && blobOrBase64.startsWith('data:')) {
-      const arr = blobOrBase64.split(',');
-      const mime = arr[0].match(/:(.*?);/)[1];
-      const bstr = atob(arr[1]);
-      let n = bstr.length;
-      const u8arr = new Uint8Array(n);
-      while (n--) {
-        u8arr[n] = bstr.charCodeAt(n);
+if (typeof window !== 'undefined') {
+  window.uploadEngine15Asset = async function(blobOrBase64, metadata = {}) {
+    try {
+      let fileBlob;
+      if (typeof blobOrBase64 === 'string' && blobOrBase64.startsWith('data:')) {
+        const arr = blobOrBase64.split(',');
+        const mime = arr[0].match(/:(.*?);/)[1];
+        const bstr = atob(arr[1]);
+        let n = bstr.length;
+        const u8arr = new Uint8Array(n);
+        while (n--) {
+          u8arr[n] = bstr.charCodeAt(n);
+        }
+        fileBlob = new Blob([u8arr], { type: mime });
+      } else {
+        fileBlob = blobOrBase64;
       }
-      fileBlob = new Blob([u8arr], { type: mime });
-    } else {
-      fileBlob = blobOrBase64;
+
+      const formData = new FormData();
+      formData.append('file', fileBlob, metadata.filename || 'engine15_render.png');
+      formData.append('metadata', JSON.stringify({
+        archetype: metadata.archetype || 'auto',
+        compositionScore: metadata.compositionScore || null,
+        generatedAt: new Date().toISOString()
+      }));
+
+      return await gatewayFetch('/api/social/v1/assets', {
+        method: 'POST',
+        body: formData
+      });
+    } catch (err) {
+      console.error('Failed to upload Engine 15 asset:', err);
+      throw err;
     }
-
-    const formData = new FormData();
-    formData.append('file', fileBlob, metadata.filename || 'engine15_render.png');
-    formData.append('metadata', JSON.stringify({
-      archetype: metadata.archetype || 'auto',
-      compositionScore: metadata.compositionScore || null,
-      generatedAt: new Date().toISOString()
-    }));
-
-    return await gatewayFetch('/api/social/v1/assets', {
-      method: 'POST',
-      body: formData
-    });
-  } catch (err) {
-    console.error('Failed to upload Engine 15 asset:', err);
-    throw err;
-  }
-};
+  };
+}
