@@ -98,7 +98,7 @@ class Config:
     allow_http_upstream: bool = False
 
     @classmethod
-    from_env(cls) -> "Config":
+    def from_env(cls) -> "Config":
         return cls(
             social_base_url=os.getenv("SOCIAL_BASE_URL", ""),
             social_api_key=os.getenv("SOCIAL_ADMIN_KEY", ""),
