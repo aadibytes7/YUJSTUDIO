@@ -396,8 +396,8 @@ def create_app(settings: Config | None = None) -> FastAPI:
             if "content" in path or "assets" in path:
                 return JSONResponse(UPLOADED_ASSETS)
             
-            if path == "v1/campaigns" or path == "campaigns":
-                return JSONResponse(CREATED_CAMPAIGNS)
+            if path in ("v1/campaigns", "campaigns"):
+                return JSONResponse({"campaigns": CREATED_CAMPAIGNS})
             
             if path.startswith("v1/campaigns/"):
                 camp_id = path.split("/")[-1]
