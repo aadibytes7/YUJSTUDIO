@@ -3896,10 +3896,17 @@ function jobModal(id) {
       <div class="setting-row">
         <div>
           <strong>Remote Publication Receipt</strong>
-          <small>${e(j.remote_post_id ? `Verified Meta Post ID: ${j.remote_post_id}` : 'Awaiting automatic queue dispatch')}</small>
+          <small>${e(j.remote_post_id ? `Verified Meta Post ID: ${j.remote_post_id}` : (j.error ? `Error: ${j.error}` : 'Awaiting automatic queue dispatch'))}</small>
         </div>
-        ${j.remote_post_id ? `<span class="tag good">${icon('check')} Meta Verified</span>` : ''}
+        ${j.remote_post_id ? `<span class="tag good">${icon('check')} Meta Verified</span>` : (j.error ? `<span class="tag bad">Failed</span>` : '')}
       </div>
+
+      ${j.error ? `
+        <div class="notice error" style="margin-top:12px; background:rgba(239, 68, 68, 0.14); border:1px solid rgba(239, 68, 68, 0.4); color:#fca5a5; padding:12px 14px; border-radius:var(--radius-md); font-size:13px; line-height:1.5;">
+          <strong style="display:block; margin-bottom:4px; color:#f87171;">⚠️ Meta Dispatch Error:</strong>
+          <span>${e(j.error)}</span>
+        </div>
+      ` : ''}
 
       ${future && (j.status === 'scheduled' || j.status === 'held') ? `
         <form id="rescheduleForm" data-id="${e(j.id)}" class="form-stack" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border-subtle);">

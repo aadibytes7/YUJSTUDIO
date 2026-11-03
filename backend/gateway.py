@@ -31,6 +31,8 @@ from supabase import create_client
 
 ROOT = Path(__file__).resolve().parent
 FRONTEND_DIR = (ROOT.parent / "frontend") if (ROOT.parent / "frontend" / "index.html").exists() else ROOT
+UPLOADS_DIR = FRONTEND_DIR / "uploads"
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 SESSION_COOKIE = "yuj_console_session"
 SESSION_SECONDS = 8 * 60 * 60
 SAFE_PATH = re.compile(r"^[a-zA-Z0-9._/-]{1,220}$")
@@ -125,12 +127,18 @@ async def publish_to_instagram(image_url: str, caption: str) -> dict:
 async def publish_to_facebook(image_url: str, caption: str) -> dict:
     """Publish a photo to Facebook Page using Meta Graph API photos endpoint."""
     meta_token = os.getenv("META_ACCESS_TOKEN") or os.getenv("FACEBOOK_ACCESS_TOKEN") or os.getenv("META_TOKEN") or ""
-    page_id = os.getenv("TAXILAAUTO_PAGE_ID") or os.getenv("FACEBOOK_PAGE_ID") or os.getenv("META_PAGE_ID") or "1253108971222914"
+    page_id = (
+        os.getenv("TAXILAAUTO_PAGE_ID") or 
+        os.getenv("FACEBOOK_PAGE_ID") or 
+        os.getenv("META_PAGE_ID") or 
+        os.getenv("PAGE_ID") or 
+        "1331411980059857"
+    )
 
     if not meta_token:
         return {"success": False, "error": "META_ACCESS_TOKEN environment variable not set on server", "platform": "facebook"}
     if not page_id:
-        return {"success": False, "error": "TAXILAAUTO_PAGE_ID environment variable not set on server", "platform": "facebook"}
+        return {"success": False, "error": "Facebook Page ID not configured on server", "platform": "facebook"}
     if not image_url or not image_url.startswith("http"):
         return {"success": False, "error": "Valid public HTTPS image URL required for Facebook publication", "platform": "facebook"}
 
@@ -385,6 +393,19 @@ def create_app(settings: Config | None = None) -> FastAPI:
     async def sample_image():
         return FileResponse(FRONTEND_DIR / "assets" / "engine15-sample.png", media_type="image/png")
 
+    @app.get("/uploads/{filename}")
+    async def serve_uploaded_asset(filename: str):
+        file_path = UPLOADS_DIR / filename
+        if not file_path.exists():
+            raise HTTPException(404, "Uploaded asset not found")
+        ext = filename.split(".")[-1].lower()
+        media_type = "image/png"
+        if ext in ("jpg", "jpeg"):
+            media_type = "image/jpeg"
+        elif ext == "webp":
+            media_type = "image/webp"
+        return FileResponse(file_path, media_type=media_type)
+
     @app.get("/health/live")
     async def health():
         return {"status": "ok", "service": "yuj-marketing-console", "mode": "live" if live else "demo"}
@@ -480,8 +501,17 @@ def create_app(settings: Config | None = None) -> FastAPI:
             
         filename = getattr(file, "filename", "exported_asset.png")
         file_bytes = await file.read()
-        file_path = f"uploads/{secrets.token_hex(4)}_{filename}"
+        safe_name = f"{secrets.token_hex(4)}_{re.sub(r'[^a-zA-Z0-9._-]', '_', filename)}"
         
+        # 1. Save locally to guarantee a public HTTPS URL on Render
+        local_file_path = UPLOADS_DIR / safe_name
+        local_file_path.write_bytes(file_bytes)
+        
+        forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host") or "yujstudio.onrender.com"
+        proto = request.headers.get("x-forwarded-proto") or "https"
+        local_public_url = f"{proto}://{forwarded_host}/uploads/{safe_name}"
+        
+        # 2. Also upload to Supabase storage if credentials exist
         supabase_url = os.getenv("SUPABASE_URL", "https://wztnopehqmufawgkjzya.supabase.co")
         supabase_key = (
             os.getenv("SUPABASE_SECRET_KEY") or 
@@ -495,18 +525,17 @@ def create_app(settings: Config | None = None) -> FastAPI:
             try:
                 supabase = create_client(supabase_url, supabase_key)
                 supabase.storage.from_("social-media-assets").upload(
-                    path=file_path,
+                    path=f"uploads/{safe_name}",
                     file=file_bytes,
                     file_options={"content-type": getattr(file, "content_type", "image/png"), "upsert": "true"}
                 )
-                public_url = supabase.storage.from_("social-media-assets").get_public_url(file_path)
+                public_url = supabase.storage.from_("social-media-assets").get_public_url(f"uploads/{safe_name}")
             except Exception as e:
                 print(f"Supabase upload notice: {e}")
         
+        # Fall back to server's own public HTTPS URL
         if not public_url:
-            b64_data = base64.b64encode(file_bytes).decode("ascii")
-            mime = getattr(file, "content_type", "image/png")
-            public_url = f"data:{mime};base64,{b64_data}"
+            public_url = local_public_url
         
         asset_item = {
             "id": secrets.token_hex(8),
@@ -534,7 +563,13 @@ def create_app(settings: Config | None = None) -> FastAPI:
         if request.method == "GET" and "accounts" in path:
             meta_token = os.getenv("META_ACCESS_TOKEN") or os.getenv("FACEBOOK_ACCESS_TOKEN") or os.getenv("META_TOKEN") or ""
             ig_user_id = os.getenv("INSTAGRAM_ACCOUNT_ID") or os.getenv("INSTAGRAM_USER_ID") or os.getenv("META_IG_ACCOUNT_ID") or ""
-            page_id = os.getenv("TAXILAAUTO_PAGE_ID") or os.getenv("FACEBOOK_PAGE_ID") or os.getenv("META_PAGE_ID") or "1253108971222914"
+            page_id = (
+                os.getenv("TAXILAAUTO_PAGE_ID") or 
+                os.getenv("FACEBOOK_PAGE_ID") or 
+                os.getenv("META_PAGE_ID") or 
+                os.getenv("PAGE_ID") or 
+                "1331411980059857"
+            )
 
             ig_ready = bool(meta_token and ig_user_id)
             fb_ready = bool(meta_token and page_id)
@@ -716,9 +751,13 @@ def create_app(settings: Config | None = None) -> FastAPI:
                 }
                 CREATED_JOBS.insert(0, job_record)
 
+            error_details = [r.get("error") for r in results if r.get("error")]
+            primary_error = "; ".join(error_details) if error_details else "Publish failed"
             return JSONResponse({
                 "status": "success" if (has_success or not meta_token) else "error",
-                "message": "Dispatch completed" if has_success else "Dispatch completed with warnings",
+                "message": "Dispatch completed" if has_success else primary_error,
+                "detail": primary_error if not has_success else None,
+                "error": primary_error if not has_success else None,
                 "results": results,
                 "post_ids": post_ids,
                 "draft": draft
