@@ -73,67 +73,74 @@ def format_campaign(camp: dict) -> dict:
     }
 
 
-async def resolve_meta_context(meta_token: str, page_id: str, ig_user_id: str = "") -> tuple[str, str]:
-    """Resolves the Page Access Token and Instagram Business Account ID.
-    If a User Access Token is provided, fetches the dedicated Page Access Token
-    to avoid deprecated 'publish_actions' permission error.
+async def resolve_meta_context(meta_token: str, preferred_page_id: str = "", ig_user_id: str = "") -> tuple[str, str, str]:
+    """Dynamically retrieves Page Access Token, actual Page ID, and Instagram Business Account ID
+    directly from Meta using the User Access Token via me/accounts.
     """
     page_token = meta_token
+    real_page_id = preferred_page_id
     resolved_ig_id = ig_user_id
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
+            # 1. Query me/accounts - this returns the actual managed pages and their tokens
             r = await client.get(
-                f"https://graph.facebook.com/v21.0/{page_id}",
-                params={"fields": "access_token,instagram_business_account", "access_token": meta_token}
+                "https://graph.facebook.com/v21.0/me/accounts",
+                params={"fields": "id,name,access_token,instagram_business_account", "access_token": meta_token}
             )
             data = r.json()
-            if "access_token" in data:
-                page_token = data["access_token"]
-            if "instagram_business_account" in data and not resolved_ig_id:
-                resolved_ig_id = data["instagram_business_account"].get("id", "")
-
-            if page_token == meta_token or not resolved_ig_id:
+            pages = data.get("data", [])
+            
+            target_page = None
+            if pages:
+                # Prefer matching preferred_page_id if in the list
+                if preferred_page_id:
+                    for p in pages:
+                        if str(p.get("id")) == str(preferred_page_id):
+                            target_page = p
+                            break
+                # If preferred_page_id was invalid or didn't match, take the first valid managed page!
+                if not target_page:
+                    target_page = pages[0]
+                
+                real_page_id = str(target_page["id"])
+                page_token = target_page.get("access_token") or meta_token
+                ig_info = target_page.get("instagram_business_account") or {}
+                if ig_info.get("id"):
+                    resolved_ig_id = str(ig_info["id"])
+                    
+            # 2. If me/accounts returned nothing, try direct query on real_page_id
+            if (page_token == meta_token or not real_page_id) and preferred_page_id:
                 r2 = await client.get(
-                    "https://graph.facebook.com/v21.0/me/accounts",
-                    params={"fields": "id,access_token,instagram_business_account", "access_token": meta_token}
+                    f"https://graph.facebook.com/v21.0/{preferred_page_id}",
+                    params={"fields": "access_token,instagram_business_account", "access_token": meta_token}
                 )
-                data2 = r2.json()
-                for item in data2.get("data", []):
-                    if str(item.get("id")) == str(page_id):
-                        if "access_token" in item:
-                            page_token = item["access_token"]
-                        if "instagram_business_account" in item and not resolved_ig_id:
-                            resolved_ig_id = item["instagram_business_account"].get("id", "")
-                        break
+                d2 = r2.json()
+                if "access_token" in d2:
+                    page_token = d2["access_token"]
+                    real_page_id = preferred_page_id
+                if "instagram_business_account" in d2 and not resolved_ig_id:
+                    resolved_ig_id = str(d2["instagram_business_account"].get("id", ""))
     except Exception as e:
-        print(f"Failed to auto-resolve page token: {e}")
+        print(f"Failed to resolve meta context: {e}")
 
-    return page_token, resolved_ig_id
+    return page_token, real_page_id, resolved_ig_id
 
 
 async def publish_to_instagram(image_url: str, caption: str) -> dict:
     """Publish a photo to Instagram using Meta Graph API (2-step container + publish flow)."""
     meta_token = os.getenv("META_ACCESS_TOKEN") or os.getenv("FACEBOOK_ACCESS_TOKEN") or os.getenv("META_TOKEN") or ""
-    ig_user_id = os.getenv("INSTAGRAM_ACCOUNT_ID") or os.getenv("INSTAGRAM_USER_ID") or os.getenv("META_IG_ACCOUNT_ID") or ""
-    page_id = (
-        os.getenv("TAXILAAUTO_PAGE_ID") or 
-        os.getenv("FACEBOOK_PAGE_ID") or 
-        os.getenv("META_PAGE_ID") or 
-        os.getenv("PAGE_ID") or 
-        "1331411980059857"
-    )
+    ig_user_id = os.getenv("INSTAGRAM_ACCOUNT_ID") or os.getenv("INSTAGRAM_USER_ID") or os.getenv("META_IG_ACCOUNT_ID") or "17841450567419332"
+    page_id = os.getenv("TAXILAAUTO_PAGE_ID") or os.getenv("FACEBOOK_PAGE_ID") or os.getenv("PAGE_ID") or "1331411980059857"
 
     if not meta_token:
         return {"success": False, "error": "META_ACCESS_TOKEN environment variable not set on server", "platform": "instagram"}
     if not image_url or not image_url.startswith("http"):
         return {"success": False, "error": "Valid public HTTPS image URL required for Instagram publication", "platform": "instagram"}
 
-    # Auto-resolve Page Access Token and Instagram ID
-    page_token, resolved_ig_id = await resolve_meta_context(meta_token, page_id, ig_user_id)
-    target_ig_id = resolved_ig_id or ig_user_id
-    if not target_ig_id:
-        return {"success": False, "error": "Instagram Business Account ID not found. Ensure your Instagram Professional account is connected to your Facebook Page", "platform": "instagram"}
+    # Dynamically resolve real Page Token and Instagram Business Account ID
+    page_token, _, resolved_ig_id = await resolve_meta_context(meta_token, preferred_page_id=page_id, ig_user_id=ig_user_id)
+    target_ig_id = ig_user_id or resolved_ig_id or "17841450567419332"
 
     try:
         async with httpx.AsyncClient(timeout=45.0) as client:
@@ -187,17 +194,16 @@ async def publish_to_facebook(image_url: str, caption: str) -> dict:
 
     if not meta_token:
         return {"success": False, "error": "META_ACCESS_TOKEN environment variable not set on server", "platform": "facebook"}
-    if not page_id:
-        return {"success": False, "error": "Facebook Page ID not configured on server", "platform": "facebook"}
     if not image_url or not image_url.startswith("http"):
         return {"success": False, "error": "Valid public HTTPS image URL required for Facebook publication", "platform": "facebook"}
 
-    # Automatically resolve Page Access Token to prevent 'publish_actions' deprecation error
-    page_token, _ = await resolve_meta_context(meta_token, page_id)
+    # Dynamically resolve real Page Token and real Page ID
+    page_token, real_page_id, _ = await resolve_meta_context(meta_token, preferred_page_id=page_id)
+    target_page_id = real_page_id or page_id or "1331411980059857"
 
     try:
         async with httpx.AsyncClient(timeout=45.0) as client:
-            photos_endpoint = f"https://graph.facebook.com/v21.0/{page_id}/photos"
+            photos_endpoint = f"https://graph.facebook.com/v21.0/{target_page_id}/photos"
             photos_params = {
                 "url": image_url,
                 "caption": caption,
@@ -615,7 +621,7 @@ def create_app(settings: Config | None = None) -> FastAPI:
         # 1. Accounts endpoint
         if request.method == "GET" and "accounts" in path:
             meta_token = os.getenv("META_ACCESS_TOKEN") or os.getenv("FACEBOOK_ACCESS_TOKEN") or os.getenv("META_TOKEN") or ""
-            ig_user_id = os.getenv("INSTAGRAM_ACCOUNT_ID") or os.getenv("INSTAGRAM_USER_ID") or os.getenv("META_IG_ACCOUNT_ID") or ""
+            ig_user_id = os.getenv("INSTAGRAM_ACCOUNT_ID") or os.getenv("INSTAGRAM_USER_ID") or os.getenv("META_IG_ACCOUNT_ID") or "17841450567419332"
             page_id = (
                 os.getenv("TAXILAAUTO_PAGE_ID") or 
                 os.getenv("FACEBOOK_PAGE_ID") or 
@@ -624,13 +630,18 @@ def create_app(settings: Config | None = None) -> FastAPI:
                 "1331411980059857"
             )
 
-            ig_ready = bool(meta_token and ig_user_id)
-            fb_ready = bool(meta_token and page_id)
+            # Auto-resolve actual Page ID and Instagram ID from user token
+            _, real_page_id, resolved_ig_id = await resolve_meta_context(meta_token, page_id, ig_user_id)
+            final_page_id = real_page_id or page_id
+            final_ig_id = resolved_ig_id or ig_user_id or "17841450567419332"
+
+            ig_ready = bool(meta_token and final_ig_id)
+            fb_ready = bool(meta_token and final_page_id)
 
             accounts = [
                 {
-                    "id": ig_user_id or "ig_taxilaauto",
-                    "name": "Taxilaauto Instagram",
+                    "id": final_ig_id,
+                    "name": "Taxilaauto · Instagram",
                     "label": "Taxilaauto · Instagram",
                     "brand": "Taxilaauto",
                     "platform": "instagram",
@@ -640,8 +651,8 @@ def create_app(settings: Config | None = None) -> FastAPI:
                     "type": "instagram_business"
                 },
                 {
-                    "id": page_id,
-                    "name": "Taxilaauto Facebook Page",
+                    "id": final_page_id,
+                    "name": "Taxilaauto · Facebook Page",
                     "label": "Taxilaauto · Facebook Page",
                     "brand": "Taxilaauto",
                     "platform": "meta",
@@ -733,8 +744,14 @@ def create_app(settings: Config | None = None) -> FastAPI:
             caption = draft.get("caption", "")
 
             meta_token = os.getenv("META_ACCESS_TOKEN") or os.getenv("FACEBOOK_ACCESS_TOKEN") or os.getenv("META_TOKEN") or ""
-            ig_user_id = os.getenv("INSTAGRAM_ACCOUNT_ID") or os.getenv("INSTAGRAM_USER_ID") or os.getenv("META_IG_ACCOUNT_ID") or ""
-            page_id = os.getenv("TAXILAAUTO_PAGE_ID") or os.getenv("FACEBOOK_PAGE_ID") or os.getenv("META_PAGE_ID") or "1253108971222914"
+            ig_user_id = os.getenv("INSTAGRAM_ACCOUNT_ID") or os.getenv("INSTAGRAM_USER_ID") or os.getenv("META_IG_ACCOUNT_ID") or "17841450567419332"
+            page_id = (
+                os.getenv("TAXILAAUTO_PAGE_ID") or 
+                os.getenv("FACEBOOK_PAGE_ID") or 
+                os.getenv("META_PAGE_ID") or 
+                os.getenv("PAGE_ID") or 
+                "1331411980059857"
+            )
 
             # Check selected target platforms
             target_ig = False
