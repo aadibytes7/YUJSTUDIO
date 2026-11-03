@@ -43,7 +43,7 @@ CREATED_CAMPAIGNS = []
 ALLOWED_SOCIAL = {
     "GET": [
         r"/health/(?:live|ready)",
-        r"/v1/accounts", r"/v1/campaigns", r"/v1/campaigns/[a-zA-Z0-9._-]{3,100}",
+        r"/v1/accounts", r"/v1/campaigns", r"/campaigns", r"/v1/campaigns/[a-zA-Z0-9._-]{3,100}",
         r"/v1/plans", r"/v1/plans/[a-zA-Z0-9-]{1,80}",
         r"/v1/content", r"/v1/jobs", r"/v1/calendar", r"/v1/production/status",
         r"/v1/production/jobs", r"/v1/production/jobs/[a-zA-Z0-9-]{1,80}",
@@ -397,7 +397,7 @@ def create_app(settings: Config | None = None) -> FastAPI:
                 return JSONResponse(UPLOADED_ASSETS)
             
             if path == "v1/campaigns" or path == "campaigns":
-                return JSONResponse({"campaigns": CREATED_CAMPAIGNS})
+                return JSONResponse(CREATED_CAMPAIGNS)
             
             if path.startswith("v1/campaigns/"):
                 camp_id = path.split("/")[-1]
