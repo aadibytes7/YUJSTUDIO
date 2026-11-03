@@ -83,7 +83,21 @@ async def resolve_meta_context(meta_token: str, preferred_page_id: str = "", ig_
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            # 1. Query me/accounts - this returns the actual managed pages and their tokens
+            # 1. Check if meta_token is ALREADY a direct Page Access Token!
+            r_me = await client.get(
+                "https://graph.facebook.com/v21.0/me",
+                params={"fields": "id,name,instagram_business_account", "access_token": meta_token}
+            )
+            d_me = r_me.json()
+            if "id" in d_me and d_me.get("id") != "me":
+                if "instagram_business_account" in d_me or str(d_me.get("id")) in (preferred_page_id, "1331411980059857"):
+                    real_page_id = str(d_me["id"])
+                    page_token = meta_token
+                    if "instagram_business_account" in d_me:
+                        resolved_ig_id = str(d_me["instagram_business_account"].get("id", resolved_ig_id))
+                    return page_token, real_page_id, resolved_ig_id
+
+            # 2. Query me/accounts - if it's a User Token, this returns managed pages and page tokens
             r = await client.get(
                 "https://graph.facebook.com/v21.0/me/accounts",
                 params={"fields": "id,name,access_token,instagram_business_account", "access_token": meta_token}
@@ -109,7 +123,7 @@ async def resolve_meta_context(meta_token: str, preferred_page_id: str = "", ig_
                 if ig_info.get("id"):
                     resolved_ig_id = str(ig_info["id"])
                     
-            # 2. If me/accounts returned nothing, try direct query on real_page_id
+            # 3. If me/accounts returned nothing, try direct query on real_page_id
             if (page_token == meta_token or not real_page_id) and preferred_page_id:
                 r2 = await client.get(
                     f"https://graph.facebook.com/v21.0/{preferred_page_id}",
