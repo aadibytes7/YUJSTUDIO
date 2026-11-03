@@ -315,7 +315,6 @@ def create_app(settings: Config | None = None) -> FastAPI:
                                          headers=headers, content=raw or None)
         except (httpx.RequestError, httpx.TimeoutException):
             raise HTTPException(502, "Upstream service unreachable")
-        # Do not follow redirects that could carry credentials to another origin.
         if 300 <= r.status_code < 400:
             raise HTTPException(502, "Unexpected upstream redirect refused")
         if len(r.content) > 4 * 1024 * 1024:
@@ -337,7 +336,6 @@ def create_app(settings: Config | None = None) -> FastAPI:
         file_bytes = await file.read()
         file_path = f"uploads/{secrets.token_hex(4)}_{filename}"
         
-        # Initialize Supabase client using your exact Render environment variable names
         supabase_url = os.getenv("SUPABASE_URL", "https://wztnopehqmufawgkjzya.supabase.co")
         supabase_key = (
             os.getenv("SUPABASE_SECRET_KEY") or 
@@ -350,13 +348,11 @@ def create_app(settings: Config | None = None) -> FastAPI:
             raise HTTPException(500, "Supabase key environment variable is missing on Render")
         try:
             supabase = create_client(supabase_url, supabase_key)
-            # Upload directly to your public Supabase storage bucket
             supabase.storage.from_("social-media-assets").upload(
                 path=file_path,
                 file=file_bytes,
                 file_options={"content-type": getattr(file, "content_type", "image/png"), "upsert": "true"}
             )
-            # Retrieve public URL from Supabase
             public_url = supabase.storage.from_("social-media-assets").get_public_url(file_path)
         except Exception as e:
             raise HTTPException(500, f"Supabase storage upload failed: {str(e)}")
@@ -382,7 +378,7 @@ def create_app(settings: Config | None = None) -> FastAPI:
         if not live:
             raise HTTPException(503, "Demo mode cannot perform Social Studio operations")
         
-        # Self-contained fallback for POST queries when running on a single Render service
+        # Self-contained fallback for POST queries
         if request.method == "POST" and "campaigns" in path:
             body = await request.json() if request.headers.get("content-type") == "application/json" else {}
             new_camp = {
@@ -395,12 +391,25 @@ def create_app(settings: Config | None = None) -> FastAPI:
             CREATED_CAMPAIGNS.append(new_camp)
             return JSONResponse(new_camp)
 
-        # Self-contained fallback for GET queries when running on a single Render service
+        # Self-contained fallback for GET queries
         if request.method == "GET":
             if "content" in path or "assets" in path:
                 return JSONResponse(UPLOADED_ASSETS)
-            if "campaigns" in path:
+            
+            if path == "v1/campaigns" or path == "campaigns":
                 return JSONResponse({"campaigns": CREATED_CAMPAIGNS})
+            
+            if path.startswith("v1/campaigns/"):
+                camp_id = path.split("/")[-1]
+                found = next((c for c in CREATED_CAMPAIGNS if c["id"] == camp_id), {
+                    "id": camp_id,
+                    "name": "Taxilaauto Campaign",
+                    "objective": "Brand Awareness",
+                    "status": "draft",
+                    "created_at": time.time()
+                })
+                return JSONResponse(found)
+
             if "accounts" in path:
                 page_id = os.getenv("TAXILAAUTO_PAGE_ID", "1253108971222914")
                 return JSONResponse([
