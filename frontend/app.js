@@ -1008,6 +1008,53 @@ function toggleTheme() {
   setTheme(current === 'dark' ? 'light' : 'dark');
 }
 
+/**
+ * Synchronizes the Framer Motion animated sliding pill (layoutId="activeSidebarPill")
+ * with the currently active sidebar navigation item using spring physics.
+ */
+function syncActiveSidebarPill(immediate = false) {
+  if (typeof document === 'undefined') return;
+  const pill = typeof document.getElementById === 'function' ? document.getElementById('activeSidebarPill') : null;
+  if (!pill || !pill.style) return;
+  const container = typeof document.getElementById === 'function' ? document.getElementById('sidebarNavContainer') : null;
+  if (!container || typeof container.getBoundingClientRect !== 'function') return;
+
+  const activeItem = typeof container.querySelector === 'function' ? container.querySelector('.nav-item.active') : null;
+  if (!activeItem || typeof activeItem.getBoundingClientRect !== 'function') {
+    if (pill.style) pill.style.opacity = '0';
+    return;
+  }
+
+  const containerRect = container.getBoundingClientRect();
+  const itemRect = activeItem.getBoundingClientRect();
+  if (!itemRect || !containerRect || itemRect.width === 0 || itemRect.height === 0) {
+    if (pill.style) pill.style.opacity = '0';
+    return;
+  }
+
+  const top = itemRect.top - containerRect.top + (container.scrollTop || 0);
+  const left = itemRect.left - containerRect.left;
+  const width = itemRect.width;
+  const height = itemRect.height;
+
+  if (immediate) {
+    pill.style.transition = 'none';
+  } else {
+    pill.style.transition = '';
+  }
+
+  pill.style.transform = `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`;
+  pill.style.width = `${Math.round(width)}px`;
+  pill.style.height = `${Math.round(height)}px`;
+  pill.style.opacity = '1';
+
+  if (immediate && typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => {
+      if (pill && pill.style) pill.style.transition = '';
+    });
+  }
+}
+
 // --------------------------------------------------------------------------
 // 7. CORE UI RENDER ENGINE
 // --------------------------------------------------------------------------
@@ -1065,6 +1112,7 @@ function render() {
     if (active) x.setAttribute('aria-current', 'page');
     else x.removeAttribute('aria-current');
   });
+  syncActiveSidebarPill();
 
   const appView = $('appView');
   if (appView) {
@@ -4759,8 +4807,12 @@ if (typeof document !== 'undefined') {
       try {
         localStorage.setItem('yuj_sidebar_collapsed', shell.classList.contains('sidebar-collapsed'));
       } catch {}
+      setTimeout(() => syncActiveSidebarPill(false), 260);
     }
   });
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('resize', () => syncActiveSidebarPill(true));
+  }
   $('themeToggleBtn')?.addEventListener('click', toggleTheme);
   $('notificationsBtn')?.addEventListener('click', notificationsModal);
   $('commandPaletteTrigger')?.addEventListener('click', openCommandPalette);

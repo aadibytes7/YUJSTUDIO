@@ -7,6 +7,23 @@
   <title>YUJ Studio — Marketing Intelligence OS</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23171A20' stroke='%23F28C45' stroke-width='2'/%3E%3Ctext x='32' y='44' text-anchor='middle' font-size='38' font-family='-apple-system,BlinkMacSystemFont,sans-serif' font-weight='800' fill='%23F28C45'%3EY%3C/text%3E%3Ccircle cx='46' cy='18' r='4' fill='%2351B9AD'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    if (window.tailwind) {
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              brandOrange: "#F28C45",
+              brandGreen: "#51B9AD",
+              brandIndigo: "#6366F1"
+            }
+          }
+        }
+      };
+    }
+  </script>
   <script defer src="app.js"></script>
 </head>
 <body>
@@ -39,70 +56,88 @@
         <span class="chevron" aria-hidden="true">▾</span>
       </div>
 
-      <!-- Primary navigation -->
-      <div class="sidebar-nav-label">WORKSPACE COMMAND</div>
-      <nav class="nav-group" id="mainNav">
-        <a class="nav-item" href="./engine15.html" style="text-decoration: none;">
-          <i data-icon="image">🎨</i>
-            <span class="nav-label">Engine 15 Studio</span>
-        </a>
-        <button class="nav-item active" data-page="overview" type="button" aria-current="page">
-          <i data-icon="overview"></i>
-          <span class="nav-label">Command Center</span>
-        </button>
-        <button class="nav-item" data-page="campaigns" type="button">
-          <i data-icon="target"></i>
-          <span class="nav-label">Campaigns</span>
-        </button>
-        <button class="nav-item" data-page="planner" type="button">
-          <i data-icon="grid"></i>
-          <span class="nav-label">Content Planner</span>
-        </button>
-        <button class="nav-item" data-page="creative" type="button">
-          <i data-icon="sparkles"></i>
-          <span class="nav-label">Creative Lab</span>
-          <span class="nav-badge new">ENGINE15</span>
-        </button>
-        <button class="nav-item" data-page="reviews" type="button">
-          <i data-icon="check"></i>
-          <span class="nav-label">Review Queue</span>
-          <span class="nav-count" id="sidebarReviewCount">0</span>
-        </button>
-        <button class="nav-item" data-page="calendar" type="button">
-          <i data-icon="calendar"></i>
-          <span class="nav-label">Publishing Calendar</span>
-        </button>
-      </nav>
+      <!-- Navigation Wrapper with Staggered Entrance Motion -->
+      <div class="sidebar-nav-container relative" id="sidebarNavContainer" data-stagger-children="0.04" data-motion-section>
+        <!-- Animated Active Item Selection Indicator (Sliding Pill) with Framer Motion Layout ID & Spring Physics -->
+        <div
+          class="active-sidebar-pill"
+          id="activeSidebarPill"
+          layoutId="activeSidebarPill"
+          data-layout-id="activeSidebarPill"
+          data-transition='{"type":"spring","stiffness":380,"damping":30}'
+          aria-hidden="true"
+        ></div>
 
-      <div class="sidebar-nav-label second-label">INTELLIGENCE & OPERATIONS</div>
-      <nav class="nav-group">
-        <button class="nav-item" data-page="analytics" type="button">
-          <i data-icon="chart"></i>
-          <span class="nav-label">Performance</span>
-        </button>
-        <button class="nav-item" data-page="operations" type="button">
-          <i data-icon="activity"></i>
-          <span class="nav-label">Pipeline Health</span>
-          <span class="nav-status-indicator pulse-indigo" id="sidebarHealthDot"></span>
-        </button>
-        <button class="nav-item" data-page="settings" type="button">
-          <i data-icon="sliders"></i>
-          <span class="nav-label">Connections & Settings</span>
-        </button>
-      </nav>
+        <!-- Primary navigation -->
+        <div class="sidebar-nav-label">WORKSPACE COMMAND</div>
+        <nav class="nav-group" id="mainNav">
+          <a class="nav-item sidebar-stagger-item group" href="./engine15.html" style="--item-idx: 0; text-decoration: none;" whileHover='{"x": 4}' whileTap='{"scale": 0.98}' data-motion-item>
+            <i data-icon="image">🎨</i>
+            <span class="nav-label">Engine 15 Studio</span>
+          </a>
+          <button class="nav-item active sidebar-stagger-item group" data-page="overview" type="button" aria-current="page" style="--item-idx: 1;" whileHover='{"x": 4}' whileTap='{"scale": 0.98}' data-motion-item>
+            <i data-icon="overview"></i>
+            <span class="nav-label">Command Center</span>
+          </button>
+          <button class="nav-item sidebar-stagger-item group" data-page="campaigns" type="button" style="--item-idx: 2;" whileHover='{"x": 4}' whileTap='{"scale": 0.98}' data-motion-item>
+            <i data-icon="target"></i>
+            <span class="nav-label">Campaigns</span>
+          </button>
+          <button class="nav-item sidebar-stagger-item group" data-page="planner" type="button" style="--item-idx: 3;" whileHover='{"x": 4}' whileTap='{"scale": 0.98}' data-motion-item>
+            <i data-icon="grid"></i>
+            <span class="nav-label">Content Planner</span>
+          </button>
+          <button class="nav-item sidebar-stagger-item group" data-page="creative" type="button" style="--item-idx: 4;" whileHover='{"x": 4}' whileTap='{"scale": 0.98}' data-motion-item>
+            <i data-icon="sparkles"></i>
+            <span class="nav-label">Creative Lab</span>
+            <span class="nav-badge new" data-motion-glow>ENGINE15</span>
+          </button>
+          <button class="nav-item sidebar-stagger-item group" data-page="reviews" type="button" style="--item-idx: 5;" whileHover='{"x": 4}' whileTap='{"scale": 0.98}' data-motion-item>
+            <i data-icon="check"></i>
+            <span class="nav-label">Review Queue</span>
+            <span class="nav-count" id="sidebarReviewCount" data-motion-pulse>0</span>
+          </button>
+          <button class="nav-item sidebar-stagger-item group" data-page="calendar" type="button" style="--item-idx: 6;" whileHover='{"x": 4}' whileTap='{"scale": 0.98}' data-motion-item>
+            <i data-icon="calendar"></i>
+            <span class="nav-label">Publishing Calendar</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-nav-label second-label">INTELLIGENCE & OPERATIONS</div>
+        <nav class="nav-group">
+          <button class="nav-item sidebar-stagger-item group" data-page="analytics" type="button" style="--item-idx: 7;" whileHover='{"x": 4}' whileTap='{"scale": 0.98}' data-motion-item>
+            <i data-icon="chart"></i>
+            <span class="nav-label">Performance</span>
+          </button>
+          <button class="nav-item sidebar-stagger-item group" data-page="operations" type="button" style="--item-idx: 8;" whileHover='{"x": 4}' whileTap='{"scale": 0.98}' data-motion-item>
+            <i data-icon="activity"></i>
+            <span class="nav-label">Pipeline Health</span>
+            <span class="nav-status-indicator pulse-indigo" id="sidebarHealthDot"></span>
+          </button>
+          <button class="nav-item sidebar-stagger-item group" data-page="settings" type="button" style="--item-idx: 9;" whileHover='{"x": 4}' whileTap='{"scale": 0.98}' data-motion-item>
+            <i data-icon="sliders"></i>
+            <span class="nav-label">Connections & Settings</span>
+          </button>
+        </nav>
+      </div>
 
       <div class="sidebar-fill"></div>
 
-      <!-- Quick pipeline widget -->
-      <div class="sidebar-helper" id="sidebarHelperCard">
+      <!-- Quick pipeline widget with Glassmorphic Ambient Glow & Micro-motion -->
+      <div
+        class="sidebar-helper"
+        id="sidebarHelperCard"
+        whileHover='{"y": -3, "boxShadow": "0 10px 30px -10px rgba(0,0,0,0.5)"}'
+        data-motion-card
+      >
         <div class="sidebar-helper-header">
           <div class="sidebar-helper-icon"><i data-icon="network"></i></div>
-          <span class="badge-subtle">GUARANTEED SAFE</span>
+          <span class="badge-subtle" animate='{"opacity": [0.8, 1, 0.8]}' data-motion-pulse>GUARANTEED SAFE</span>
         </div>
         <strong>Unified Marketing Pipeline</strong>
         <p>Brief → Weekly Plan → Engine15 Render → Human Approval → Meta Publish.</p>
-        <button type="button" class="sidebar-helper-link" data-action="navigate" data-target="operations">
-          Inspect Pipeline Pulse <span>→</span>
+        <button type="button" class="sidebar-helper-link group" data-action="navigate" data-target="operations">
+          Inspect Pipeline Pulse <span class="arrow-indicator inline-block transition-transform duration-200" whileHover='{"x": 5}'>→</span>
         </button>
       </div>
 
